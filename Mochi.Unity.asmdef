@@ -1,0 +1,20 @@
+{
+    "name": "Mochi.Unity",
+    "rootNamespace": "Mochi.Unity",
+    "references": [
+        "GUID:ddcaa42e7af9d4e4ebd0c653ade5be34",
+        "GUID:f51ebe6a0ceec4240a699833d6309b23",
+        "GUID:75469ad4d38634e559750d17036d5f7c"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

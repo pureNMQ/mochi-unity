@@ -1,0 +1,19 @@
+{
+    "name": "Mochi.Unity.Editor",
+    "rootNamespace": "Mochi.Unity.Editor",
+    "references": [
+        "GUID:81646c2fd90844ae911e6b72aef58f21",
+        "GUID:ddcaa42e7af9d4e4ebd0c653ade5be34"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

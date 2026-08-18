@@ -1,0 +1,14 @@
+# Unity generated
+Library/
+Temp/
+obj/
+Logs/
+UserSettings/
+*.csproj
+*.sln
+*.user
+
+# IDE
+.vs/
+.idea/
+.vscode/
