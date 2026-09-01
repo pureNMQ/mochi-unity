@@ -11,7 +11,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
     public class GUINavigatorTests
     {
         [UnityTest]
-        public IEnumerator InitializeAndClose_UseRuntimeSinglePageContainer()
+        public IEnumerator Initialize_CreatesRuntimePageAndModalContainers()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -21,6 +21,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 {
                     GUINavigator navigator = root.AddComponent<GUINavigator>();
                     PageContainer container = navigator.Pages;
+                    ModalContainer modalContainer = navigator.Modals;
                     Canvas canvas = root.GetComponentInChildren<Canvas>();
 
                     Assert.That(GUINavigator.Instance, Is.SameAs(navigator));
@@ -28,6 +29,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     Assert.That(canvas.transform.parent, Is.SameAs(root.transform));
                     Assert.That(container, Is.Not.Null);
                     Assert.That(container.transform.parent, Is.SameAs(canvas.transform));
+                    Assert.That(modalContainer, Is.Not.Null);
+                    Assert.That(modalContainer.transform.parent, Is.SameAs(canvas.transform));
 
                     prefab = new GameObject("PagePrefab");
                     prefab.SetActive(false);
@@ -40,8 +43,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                     Assert.That(page, Is.Not.Null);
                     Assert.That(navigator.Pages, Is.SameAs(container));
-                    Assert.That(await navigator.BackAsync(), Is.False);
-                    Assert.That(await navigator.CloseAsync(), Is.True);
+                    Assert.That(navigator.Modals, Is.SameAs(modalContainer));
+                    Assert.That(await navigator.Pages.CloseAsync(), Is.True);
                     Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 }
                 finally

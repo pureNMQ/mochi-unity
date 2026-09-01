@@ -1,4 +1,3 @@
-using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -9,12 +8,15 @@ namespace Mochi.Unity.Preview.GUI
     {
         private const string CanvasObjectName = "Canvas";
         private const string PageContainerObjectName = "PageContainer";
+        private const string ModalContainerObjectName = "ModalContainer";
 
         private static GUINavigator instance;
         private PageContainer pages;
+        private ModalContainer modals;
 
         public static GUINavigator Instance => instance;
         public PageContainer Pages => pages;
+        public ModalContainer Modals => modals;
 
         private void Awake()
         {
@@ -32,6 +34,7 @@ namespace Mochi.Unity.Preview.GUI
         {
             EnsureRuntimeRoots();
             pages.Initialize(loader);
+            modals.Initialize(loader);
         }
 
         private void EnsureRuntimeRoots()
@@ -73,6 +76,21 @@ namespace Mochi.Unity.Preview.GUI
             pageContainerRect.localScale = Vector3.one;
 
             pages = pageContainerObject.GetComponent<PageContainer>();
+
+            GameObject modalContainerObject = new GameObject(
+                ModalContainerObjectName,
+                typeof(RectTransform),
+                typeof(ModalContainer));
+            modalContainerObject.transform.SetParent(canvasObject.transform, false);
+
+            RectTransform modalContainerRect = modalContainerObject.GetComponent<RectTransform>();
+            modalContainerRect.anchorMin = Vector2.zero;
+            modalContainerRect.anchorMax = Vector2.one;
+            modalContainerRect.offsetMin = Vector2.zero;
+            modalContainerRect.offsetMax = Vector2.zero;
+            modalContainerRect.localScale = Vector3.one;
+
+            modals = modalContainerObject.GetComponent<ModalContainer>();
         }
 
         private void OnDestroy()
@@ -83,14 +101,5 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        public UniTask<bool> BackAsync()
-        {
-            return pages == null ? UniTask.FromResult(false) : pages.BackAsync();
-        }
-
-        public UniTask<bool> CloseAsync()
-        {
-            return pages == null ? UniTask.FromResult(false) : pages.CloseAsync();
-        }
     }
 }
