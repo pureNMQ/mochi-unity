@@ -297,6 +297,11 @@ namespace Mochi.Unity.Preview.GUI
             object result)
         {
             IsBusy = true;
+            if (removeStartIndex > 0)
+            {
+                MoveBackdropBelowPanel(modals[removeStartIndex - 1].Panel);
+            }
+
             int removeCount = modals.Count - removeStartIndex;
             List<ModalStackItem> removedEntries = new List<ModalStackItem>(removeCount);
             for (int index = modals.Count - 1; index >= removeStartIndex; index--)
