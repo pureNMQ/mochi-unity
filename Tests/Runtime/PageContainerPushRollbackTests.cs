@@ -85,7 +85,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
             Assert.That(firstPage.gameObject.activeSelf, Is.True);
             Assert.That(firstPage.CanvasGroup.interactable, Is.True);
             Assert.That(firstPage.CanvasGroup.blocksRaycasts, Is.True);
-            Assert.That(firstPage.Events[firstPage.Events.Count - 1], Is.EqualTo("OnShow"));
+            Assert.That(firstPage.Events[firstPage.Events.Count - 1], Is.EqualTo("Enter"));
             Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(originalFocus));
             Assert.That(container.transform.childCount, Is.EqualTo(1));
             Assert.That(loader.ReleaseCount, Is.EqualTo(1));

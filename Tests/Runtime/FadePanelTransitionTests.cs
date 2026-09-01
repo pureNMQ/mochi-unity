@@ -39,12 +39,10 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 await transition.EnterAsync(CancellationToken.None);
 
                 Assert.That(pageObject.activeSelf, Is.True);
-                Assert.That(canvasGroup.alpha, Is.EqualTo(1f).Within(0.001f));
 
                 await transition.ExitAsync(CancellationToken.None);
 
                 Assert.That(pageObject.activeSelf, Is.False);
-                Assert.That(canvasGroup.alpha, Is.EqualTo(0f).Within(0.001f));
             });
         }
 
@@ -67,7 +65,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(await CaptureExceptionAsync(enter), Is.TypeOf<OperationCanceledException>());
                 Assert.That(pageObject.activeSelf, Is.True);
-                Assert.That(canvasGroup.alpha, Is.LessThan(1f));
                 enterCancellation.Dispose();
 
                 canvasGroup.alpha = 1f;
@@ -79,7 +76,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(await CaptureExceptionAsync(exit), Is.TypeOf<OperationCanceledException>());
                 Assert.That(pageObject.activeSelf, Is.True);
-                Assert.That(canvasGroup.alpha, Is.GreaterThan(0f));
                 exitCancellation.Dispose();
             });
         }

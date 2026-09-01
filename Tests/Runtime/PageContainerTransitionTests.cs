@@ -39,6 +39,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 GameObject firstPrefab = Track(CreatePagePrefab("FirstPagePrefab"));
                 GameObject secondPrefab = Track(CreatePagePrefab("SecondPagePrefab"));
+                secondPrefab.GetComponent<TransitionPage>().HoldEnter();
                 GameObject defaultFocusTarget = new GameObject("SecondPageDefaultFocus");
                 defaultFocusTarget.transform.SetParent(secondPrefab.transform, false);
                 SetDefaultFocusTarget(secondPrefab.GetComponent<TransitionPage>(), defaultFocusTarget);
@@ -58,11 +59,24 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(firstPage.ExitCount, Is.Zero);
 
                 loader.CompleteSecondPage();
+                await UniTask.Yield();
+                TransitionPage[] childPages = container.GetComponentsInChildren<TransitionPage>(true);
+                TransitionPage enteringPage = Array.Find(childPages, candidate => candidate != firstPage);
+                Assert.That(enteringPage, Is.Not.Null);
+                Assert.That(firstPage.IsVisible, Is.True);
+                Assert.That(firstPage.gameObject.activeSelf, Is.True);
+                Assert.That(enteringPage.IsVisible, Is.True);
+                Assert.That(enteringPage.CanvasGroup.interactable, Is.False);
+                Assert.That(enteringPage.CanvasGroup.blocksRaycasts, Is.False);
+
+                enteringPage.CompleteEnter();
                 TransitionPage secondPage = await secondPush;
 
                 Assert.That(secondPage, Is.Not.Null);
                 Assert.That(secondPage.EnterCount, Is.EqualTo(1));
                 Assert.That(secondPage.ExitCount, Is.Zero);
+                Assert.That(firstPage.IsVisible, Is.False);
+                Assert.That(secondPage.CanvasGroup.interactable, Is.True);
                 Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(GetDefaultFocusTarget(secondPage)));
             });
         }
@@ -136,6 +150,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
         private sealed class TransitionPage : Panel, IPanelTransition
         {
+            private readonly UniTaskCompletionSource enterCompletion = new UniTaskCompletionSource();
+            [SerializeField] private bool holdEnter;
+
             public int EnterCount { get; private set; }
             public int ExitCount { get; private set; }
             public CanvasGroup CanvasGroup => GetComponent<CanvasGroup>();
@@ -143,13 +160,23 @@ namespace Mochi.Unity.Preview.GUI.Tests
             public UniTask EnterAsync(CancellationToken cancellationToken)
             {
                 EnterCount++;
-                return UniTask.CompletedTask;
+                return holdEnter ? enterCompletion.Task : UniTask.CompletedTask;
             }
 
             public UniTask ExitAsync(CancellationToken cancellationToken)
             {
                 ExitCount++;
                 return UniTask.CompletedTask;
+            }
+
+            public void CompleteEnter()
+            {
+                enterCompletion.TrySetResult();
+            }
+
+            public void HoldEnter()
+            {
+                holdEnter = true;
             }
         }
     }
