@@ -81,6 +81,34 @@ namespace Mochi.Unity.Preview.GUI.Tests
             });
         }
 
+        [UnityTest]
+        public IEnumerator AttachedTransitionTakesPrecedenceWhenPanelAlsoImplementsTransition()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GameObject containerObject = Track(new GameObject("PageContainer"));
+                PageContainer container = containerObject.AddComponent<PageContainer>();
+
+                GameObject prefab = Track(new GameObject("ConflictPagePrefab"));
+                prefab.SetActive(false);
+                prefab.AddComponent<CanvasGroup>();
+                prefab.AddComponent<ConflictPage>();
+                prefab.AddComponent<AttachedTransition>();
+
+                container.Initialize(new SinglePanelLoader(prefab));
+
+                ConflictPage page = await container.PushAsync<ConflictPage>("conflict-page");
+                AttachedTransition transition = page.GetComponent<AttachedTransition>();
+
+                Assert.That(page.PanelEnterCount, Is.Zero);
+                Assert.That(transition.EnterCount, Is.EqualTo(1));
+
+                Assert.That(await container.CloseAsync(), Is.True);
+                Assert.That(page.PanelExitCount, Is.Zero);
+                Assert.That(transition.ExitCount, Is.EqualTo(1));
+            });
+        }
+
         private GameObject CreatePagePrefab(string name)
         {
             GameObject prefab = new GameObject(name);
@@ -108,6 +136,25 @@ namespace Mochi.Unity.Preview.GUI.Tests
         {
             objectsToDestroy.Add(target);
             return target;
+        }
+
+        private sealed class SinglePanelLoader : IPanelLoader
+        {
+            private readonly GameObject prefab;
+
+            public SinglePanelLoader(GameObject prefab)
+            {
+                this.prefab = prefab;
+            }
+
+            public UniTask<GameObject> LoadAsync(string key, CancellationToken cancellationToken)
+            {
+                return UniTask.FromResult(prefab);
+            }
+
+            public void Release(GameObject loadedPrefab)
+            {
+            }
         }
 
         private sealed class KeyedPanelLoader : IPanelLoader
@@ -177,6 +224,42 @@ namespace Mochi.Unity.Preview.GUI.Tests
             public void HoldEnter()
             {
                 holdEnter = true;
+            }
+        }
+
+        private sealed class ConflictPage : Panel, IPanelTransition
+        {
+            public int PanelEnterCount { get; private set; }
+            public int PanelExitCount { get; private set; }
+
+            public UniTask EnterAsync(CancellationToken cancellationToken)
+            {
+                PanelEnterCount++;
+                return UniTask.CompletedTask;
+            }
+
+            public UniTask ExitAsync(CancellationToken cancellationToken)
+            {
+                PanelExitCount++;
+                return UniTask.CompletedTask;
+            }
+        }
+
+        private sealed class AttachedTransition : MonoBehaviour, IPanelTransition
+        {
+            public int EnterCount { get; private set; }
+            public int ExitCount { get; private set; }
+
+            public UniTask EnterAsync(CancellationToken cancellationToken)
+            {
+                EnterCount++;
+                return UniTask.CompletedTask;
+            }
+
+            public UniTask ExitAsync(CancellationToken cancellationToken)
+            {
+                ExitCount++;
+                return UniTask.CompletedTask;
             }
         }
     }

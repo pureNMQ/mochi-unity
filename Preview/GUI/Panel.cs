@@ -52,7 +52,7 @@ namespace Mochi.Unity.Preview.GUI
 
         internal UniTask EnterInternalAsync(CancellationToken cancellationToken)
         {
-            IPanelTransition transition = this as IPanelTransition ?? GetComponent<IPanelTransition>();
+            IPanelTransition transition = ResolveTransition();
             if (transition != null)
             {
                 return transition.EnterAsync(cancellationToken);
@@ -63,13 +63,38 @@ namespace Mochi.Unity.Preview.GUI
 
         internal UniTask ExitInternalAsync(CancellationToken cancellationToken)
         {
-            IPanelTransition transition = this as IPanelTransition ?? GetComponent<IPanelTransition>();
+            IPanelTransition transition = ResolveTransition();
             if (transition != null)
             {
                 return transition.ExitAsync(cancellationToken);
             }
 
             return UniTask.CompletedTask;
+        }
+
+        private IPanelTransition ResolveTransition()
+        {
+            IPanelTransition resolvedTransition = GetComponent<IPanelTransition>();
+            if (resolvedTransition == null)
+            {
+                return null;
+            }
+
+            if (resolvedTransition != this)
+            {
+                return resolvedTransition;
+            }
+
+            IPanelTransition[] transitions = GetComponents<IPanelTransition>();
+            foreach (IPanelTransition transition in transitions)
+            {
+                if (transition != null && transition != this)
+                {
+                    return transition;
+                }
+            }
+
+            return resolvedTransition;
         }
 
         internal void SetInteractionEnabledInternal(bool enabled)
