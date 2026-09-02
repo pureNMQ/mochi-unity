@@ -26,6 +26,15 @@ namespace Mochi.Unity.Preview.GUI.Tests
             objectsToDestroy.Clear();
         }
 
+        [Test]
+        public void Panel_DoesNotExposeTransitionBridgeMethods()
+        {
+            BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+            Assert.That(typeof(Panel).GetMethod("EnterInternalAsync", flags), Is.Null);
+            Assert.That(typeof(Panel).GetMethod("ExitInternalAsync", flags), Is.Null);
+        }
+
         [UnityTest]
         public IEnumerator PushSecondPage_EntersOnlyNewPage_BlocksPreviousInteractionAndFocusesDefaultTarget()
         {
@@ -82,29 +91,27 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator AttachedTransitionTakesPrecedenceWhenPanelAlsoImplementsTransition()
+        public IEnumerator ContainerRunsAttachedTransitionForPlainPanel()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 GameObject containerObject = Track(new GameObject("PageContainer"));
                 PageContainer container = containerObject.AddComponent<PageContainer>();
 
-                GameObject prefab = Track(new GameObject("ConflictPagePrefab"));
+                GameObject prefab = Track(new GameObject("PlainPagePrefab"));
                 prefab.SetActive(false);
                 prefab.AddComponent<CanvasGroup>();
-                prefab.AddComponent<ConflictPage>();
+                prefab.AddComponent<PlainPage>();
                 prefab.AddComponent<AttachedTransition>();
 
                 container.Initialize(new SinglePanelLoader(prefab));
 
-                ConflictPage page = await container.PushAsync<ConflictPage>("conflict-page");
+                PlainPage page = await container.PushAsync<PlainPage>("plain-page");
                 AttachedTransition transition = page.GetComponent<AttachedTransition>();
 
-                Assert.That(page.PanelEnterCount, Is.Zero);
                 Assert.That(transition.EnterCount, Is.EqualTo(1));
 
                 Assert.That(await container.CloseAsync(), Is.True);
-                Assert.That(page.PanelExitCount, Is.Zero);
                 Assert.That(transition.ExitCount, Is.EqualTo(1));
             });
         }
@@ -227,22 +234,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
             }
         }
 
-        private sealed class ConflictPage : Panel, IPanelTransition
+        private sealed class PlainPage : Panel
         {
-            public int PanelEnterCount { get; private set; }
-            public int PanelExitCount { get; private set; }
-
-            public UniTask EnterAsync(CancellationToken cancellationToken)
-            {
-                PanelEnterCount++;
-                return UniTask.CompletedTask;
-            }
-
-            public UniTask ExitAsync(CancellationToken cancellationToken)
-            {
-                PanelExitCount++;
-                return UniTask.CompletedTask;
-            }
         }
 
         private sealed class AttachedTransition : MonoBehaviour, IPanelTransition

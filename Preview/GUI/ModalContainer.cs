@@ -172,7 +172,7 @@ namespace Mochi.Unity.Preview.GUI
 
                 //backdrop动画和panel进入动画同时执行
                 modalEnterStarted = true;
-                UniTask enterTask = modal.EnterInternalAsync(cancellationToken);
+                UniTask enterTask = RunEnterTransitionAsync(modal, cancellationToken);
                 UniTask backdropTask = previousEntry == null
                     ? FadeBackdropAsync(1f, cancellationToken)
                     : UniTask.CompletedTask;
@@ -212,7 +212,7 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (modalEnterStarted)
                 {
-                    await TryCleanupAsync(() => modal.ExitInternalAsync(CancellationToken.None));
+                    await TryCleanupAsync(() => RunExitTransitionAsync(modal, CancellationToken.None));
                 }
 
                 if (modal.IsVisible || modal.gameObject.activeSelf)
@@ -327,7 +327,7 @@ namespace Mochi.Unity.Preview.GUI
                 UniTask[] exitTasks = new UniTask[removedEntries.Count];
                 for (int index = 0; index < removedEntries.Count; index++)
                 {
-                    exitTasks[index] = removedEntries[index].Panel.ExitInternalAsync(cancellationToken);
+                    exitTasks[index] = RunExitTransitionAsync(removedEntries[index].Panel, cancellationToken);
                 }
 
                 UniTask[] transitionTasks = new UniTask[exitTasks.Length + 1];
@@ -424,7 +424,7 @@ namespace Mochi.Unity.Preview.GUI
                     TryCleanup(entry.Panel.ShowInternal);
                 }
 
-                await TryCleanupAsync(() => entry.Panel.EnterInternalAsync(CancellationToken.None));
+                await TryCleanupAsync(() => RunEnterTransitionAsync(entry.Panel, CancellationToken.None));
                 entry.Panel.SetInteractionEnabledInternal(false);
             }
 

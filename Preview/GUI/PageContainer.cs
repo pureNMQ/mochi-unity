@@ -104,7 +104,7 @@ namespace Mochi.Unity.Preview.GUI
                 page.ShowInternal();
                 page.SetInteractionEnabledInternal(false);
 
-                await page.EnterInternalAsync(cancellationToken);
+                await RunEnterTransitionAsync(page, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 pageEntered = true;
 
@@ -150,7 +150,7 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (pageEntered)
                 {
-                    await TryCleanupAsync(() => page.ExitInternalAsync(CancellationToken.None));
+                    await TryCleanupAsync(() => RunExitTransitionAsync(page, CancellationToken.None));
                 }
 
                 if (page.IsVisible)
@@ -196,7 +196,7 @@ namespace Mochi.Unity.Preview.GUI
                 previousEntry.Page.ShowInternal();
                 previousEntry.Page.SetInteractionEnabledInternal(false);
 
-                await currentEntry.Page.ExitInternalAsync(cancellationToken);
+                await RunExitTransitionAsync(currentEntry.Page, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 currentEntry.Page.HideInternal();
                 currentPageHidden = true;
@@ -278,7 +278,7 @@ namespace Mochi.Unity.Preview.GUI
                 topEntry.Page.SetInteractionEnabledInternal(false);
                 try
                 {
-                    await topEntry.Page.ExitInternalAsync(cancellationToken);
+                    await RunExitTransitionAsync(topEntry.Page, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch
