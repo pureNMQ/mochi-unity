@@ -13,9 +13,9 @@ namespace Mochi.Unity.Preview.GUI
 
         protected UniTask<bool> CompleteAsync(TResult result)
         {
-            return Handle.IsValid
-                ? Handle.Container.CompleteAsync(this, result)
-                : UniTask.FromResult(false);
+            return Container == null
+                ? UniTask.FromResult(false)
+                : Container.CompleteAsync(this, result);
         }
 
         internal override void BindResultCallback(Delegate callback)

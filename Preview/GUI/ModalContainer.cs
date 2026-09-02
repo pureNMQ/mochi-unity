@@ -20,7 +20,6 @@ namespace Mochi.Unity.Preview.GUI
         private ModalBackdrop backdrop;
         private Image backdropImage;
         private CanvasGroup backdropCanvasGroup;
-        private int nextHandleVersion;
         private bool isDisposed;
 
         public int Count => modals.Count;
@@ -43,6 +42,12 @@ namespace Mochi.Unity.Preview.GUI
             EnsureBackdrop();
         }
 
+        /// <summary>
+        /// 无参数，无返回值的模态面板
+        /// </summary>
+        /// <typeparam name="TModal">模态面板类型</typeparam>
+        /// <param name="key">预制体资源键值</param>
+        /// <returns></returns>
         public UniTask<TModal> PushAsync<TModal>(string key) where TModal : ModalPanel
         {
             return PushCoreAsync<TModal>(
@@ -51,6 +56,14 @@ namespace Mochi.Unity.Preview.GUI
                 null);
         }
 
+        /// <summary>
+        /// 带返回值的模态面板
+        /// </summary>
+        /// <typeparam name="TModal">模态面板类型</typeparam>
+        /// <typeparam name="TResult">返回值类型</typeparam>
+        /// <param name="key">预制体资源键值</param>
+        /// <param name="callback">结果回调函数</param>
+        /// <returns></returns>
         public UniTask<TModal> PushAsync<TModal, TResult>(
             string key,
             ModalResultCallback<TResult> callback = null)
@@ -62,6 +75,16 @@ namespace Mochi.Unity.Preview.GUI
                 modal => modal.BindResultCallback(callback));
         }
 
+        /// <summary>
+        /// 带参数和返回值的模态面板
+        /// </summary>
+        /// <typeparam name="TModal">模态面板类型</typeparam>
+        /// <typeparam name="TData">参数类型</typeparam>
+        /// <typeparam name="TResult">返回值类型</typeparam>
+        /// <param name="key">预制体资源键值</param>
+        /// <param name="data">面传递给模态板的参数</param>
+        /// <param name="callback">结果回调函数</param>
+        /// <returns></returns>
         public UniTask<TModal> PushAsync<TModal, TData, TResult>(
             string key,
             TData data,
@@ -91,10 +114,13 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             IsBusy = true;
+            //获取当前焦点对象，确保在模态面板关闭后可以恢复焦点
             ModalStackItem previousEntry = modals.Count == 0 ? null : modals[modals.Count - 1];
             GameObject previousFocus = EventSystem.current == null
                 ? previousEntry?.Panel.DefaultFocusTarget
                 : EventSystem.current.currentSelectedGameObject;
+
+
             GameObject prefab = null;
             TModal modal = null;
             bool modalEnterStarted = false;
@@ -103,6 +129,7 @@ namespace Mochi.Unity.Preview.GUI
 
             try
             {
+                //保存焦点对象，并禁用前一个模态面板的交互
                 if (previousEntry != null)
                 {
                     previousEntry.SavedFocusTarget = previousFocus;
@@ -110,6 +137,7 @@ namespace Mochi.Unity.Preview.GUI
                 }
 
                 EnsureBackdrop();
+                //加载预制体资源
                 prefab = await loader.LoadAsync(key, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (prefab == null)
@@ -119,6 +147,7 @@ namespace Mochi.Unity.Preview.GUI
 
                 GameObject instance = Instantiate(prefab, transform, false);
                 instance.SetActive(false);
+
                 modal = instance.GetComponent<TModal>();
                 if (modal == null)
                 {
@@ -129,17 +158,19 @@ namespace Mochi.Unity.Preview.GUI
                     return null;
                 }
 
-                ModalHandle handle = new ModalHandle(this, ++nextHandleVersion);
-                modal.Bind(this, handle);
+                modal.Bind(this);
+                //给modal绑定回调函数
                 bindCallback?.Invoke(modal);
                 await prepareAsync(modal, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-
+                //执行生命周期函数
                 modal.OpenInternal();
                 modal.ShowInternal();
                 modal.SetInteractionEnabledInternal(false);
+
                 MoveBackdropBelowPanel(modal);
 
+                //backdrop动画和panel进入动画同时执行
                 modalEnterStarted = true;
                 UniTask enterTask = modal.EnterInternalAsync(cancellationToken);
                 UniTask backdropTask = previousEntry == null
@@ -150,7 +181,7 @@ namespace Mochi.Unity.Preview.GUI
 
                 modal.SetInteractionEnabledInternal(true);
                 modal.FocusDefaultInternal();
-                modals.Add(new ModalStackItem(modal, prefab, handle));
+                modals.Add(new ModalStackItem(modal, prefab));
                 committed = true;
                 return modal;
             }
@@ -225,27 +256,6 @@ namespace Mochi.Unity.Preview.GUI
             return PopEntriesAsync(modals.Count - count, false, null);
         }
 
-        public UniTask<bool> PopToAsync(ModalHandle destination)
-        {
-            if (isDisposed || IsBusy || !ContainsHandle(destination))
-            {
-                return UniTask.FromResult(false);
-            }
-
-            int destinationIndex = FindHandleIndex(destination);
-            if (destinationIndex < 0)
-            {
-                return UniTask.FromResult(false);
-            }
-
-            if (destinationIndex == modals.Count - 1)
-            {
-                return UniTask.FromResult(true);
-            }
-
-            return PopEntriesAsync(destinationIndex + 1, false, null);
-        }
-
         public UniTask<bool> CloseAsync()
         {
             if (isDisposed || IsBusy || modals.Count == 0)
@@ -274,11 +284,6 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             return PopEntriesAsync(modals.Count - 1, true, result);
-        }
-
-        internal bool ContainsHandle(ModalHandle handle)
-        {
-            return !isDisposed && handle.Container == this && FindHandleIndex(handle) >= 0;
         }
 
         internal void HandleBackdropClick()
@@ -457,6 +462,7 @@ namespace Mochi.Unity.Preview.GUI
             SetBackdropRaycasts(targetAlpha > 0f);
         }
 
+        //保证Backdrop存在
         private void EnsureBackdrop()
         {
             if (backdrop != null)
@@ -522,24 +528,6 @@ namespace Mochi.Unity.Preview.GUI
             return modals.Count > 0 && ReferenceEquals(Current, modal);
         }
 
-        private int FindHandleIndex(ModalHandle handle)
-        {
-            if (handle.Container != this)
-            {
-                return -1;
-            }
-
-            for (int index = 0; index < modals.Count; index++)
-            {
-                if (modals[index].Handle == handle)
-                {
-                    return index;
-                }
-            }
-
-            return -1;
-        }
-
         private void OnDestroy()
         {
             if (isDisposed)
@@ -587,16 +575,14 @@ namespace Mochi.Unity.Preview.GUI
 
         private sealed class ModalStackItem
         {
-            public ModalStackItem(ModalPanel panel, GameObject prefab, ModalHandle handle)
+            public ModalStackItem(ModalPanel panel, GameObject prefab)
             {
                 Panel = panel;
                 Prefab = prefab;
-                Handle = handle;
             }
 
             public ModalPanel Panel { get; }
             public GameObject Prefab { get; }
-            public ModalHandle Handle { get; }
             public GameObject SavedFocusTarget { get; set; }
         }
 

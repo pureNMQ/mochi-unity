@@ -13,6 +13,16 @@ namespace Mochi.Unity.Preview.GUI.Tests
     {
         private readonly List<GameObject> objectsToDestroy = new List<GameObject>();
 
+        [Test]
+        public void PublicApi_DoesNotExposeModalHandleOrPopTo()
+        {
+            Assert.That(typeof(ModalPanel).GetProperty("Handle"), Is.Null);
+            Assert.That(typeof(ModalContainer).GetMethod("PopToAsync"), Is.Null);
+            Assert.That(
+                typeof(ModalContainer).Assembly.GetType("Mochi.Unity.Preview.GUI.ModalHandle"),
+                Is.Null);
+        }
+
         [TearDown]
         public void TearDown()
         {
@@ -42,7 +52,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     notifications.Add($"event:{hasResult}:{result}");
 
                 Assert.That(modal.Source, Is.EqualTo("source"));
-                Assert.That(modal.Handle.IsValid, Is.True);
 
                 Assert.That(await modal.CompleteResultAsync("accepted"), Is.True);
 
@@ -52,12 +61,11 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     "event:True:accepted"
                 }));
                 Assert.That(container.Count, Is.Zero);
-                Assert.That(modal.Handle.IsValid, Is.False);
             });
         }
 
         [UnityTest]
-        public IEnumerator NestedModals_KeepLowerVisibleAndPopToKeepsDestination()
+        public IEnumerator NestedModals_KeepLowerVisibleAndPopKeepsDestination()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -83,26 +91,23 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(first.CanvasGroup.blocksRaycasts, Is.False);
                 Assert.That(second.CanvasGroup.interactable, Is.True);
                 Assert.That(second.CanvasGroup.blocksRaycasts, Is.True);
-                Assert.That(second.Handle.IsValid, Is.True);
-                Assert.That(await container.PopToAsync(first.Handle), Is.True);
+                Assert.That(await container.PopAsync(), Is.True);
 
                 Assert.That(container.Current, Is.SameAs(first));
                 Assert.That(container.Count, Is.EqualTo(1));
                 Assert.That(cancellationCount, Is.EqualTo(0));
-                Assert.That(second.Handle.IsValid, Is.False);
             });
         }
 
         [UnityTest]
-        public IEnumerator Pop_InvokesCancellationWithDefaultAndInvalidHandlesAreRejected()
+        public IEnumerator Pop_InvokesCancellationWithDefaultAndInvalidCountsAreRejected()
         {
             return UniTask.ToCoroutine(async () =>
             {
-                ModalContainer firstContainer = CreateContainer(out GameObject firstPrefab);
-                ModalContainer secondContainer = CreateContainer(out GameObject secondPrefab);
+                ModalContainer container = CreateContainer(out GameObject prefab);
                 bool hasResult = true;
                 string result = "unexpected";
-                TestModal modal = await firstContainer.PushAsync<TestModal, ModalData, string>(
+                TestModal modal = await container.PushAsync<TestModal, ModalData, string>(
                     "modal",
                     new ModalData("modal"),
                     new ModalResultCallback<string>((valid, value) =>
@@ -111,10 +116,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
                         result = value;
                     }));
 
-                Assert.That(await secondContainer.PopToAsync(modal.Handle), Is.False);
-                Assert.That(await firstContainer.PopToAsync(default), Is.False);
-                Assert.That(await firstContainer.PopAsync(0), Is.False);
-                Assert.That(await firstContainer.PopAsync(), Is.True);
+                Assert.That(await container.PopAsync(0), Is.False);
+                Assert.That(await container.PopAsync(2), Is.False);
+                Assert.That(await container.PopAsync(), Is.True);
                 Assert.That(hasResult, Is.False);
                 Assert.That(result, Is.Null);
             });

@@ -11,20 +11,18 @@ namespace Mochi.Unity.Preview.GUI
         [SerializeField] private bool closeOnBackdropClick;
 
         private ModalContainer container;
-        private ModalHandle handle;
-
-        public ModalHandle Handle => handle;
         public bool CloseOnBackdropClick => closeOnBackdropClick;
+
+        internal ModalContainer Container => container;
 
         protected UniTask<bool> CancelAsync()
         {
             return container == null ? UniTask.FromResult(false) : container.CancelAsync(this);
         }
 
-        internal void Bind(ModalContainer owner, ModalHandle modalHandle)
+        internal void Bind(ModalContainer owner)
         {
             container = owner;
-            handle = modalHandle;
             BindResultCallback(null);
         }
 
@@ -40,7 +38,6 @@ namespace Mochi.Unity.Preview.GUI
         internal void Unbind()
         {
             container = null;
-            handle = default;
             ClearResultCallbacks();
         }
 

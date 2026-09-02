@@ -47,9 +47,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     "callback:middle:False:",
                     "event:middle:False:"
                 }));
-                Assert.That(middle.Handle.IsValid, Is.False);
-                Assert.That(top.Handle.IsValid, Is.False);
-
                 Assert.That(await container.CloseAsync(), Is.True);
                 Assert.That(container.Count, Is.Zero);
                 Assert.That(notifications, Is.EqualTo(new[]
@@ -89,8 +86,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(container.Current, Is.SameAs(first));
                 Assert.That(firstCallbackCount, Is.Zero);
                 Assert.That(secondCallbackCount, Is.EqualTo(1));
-                Assert.That(second.Handle.IsValid, Is.False);
-
                 Assert.That(await first.CancelResultAsync(), Is.True);
                 Assert.That(container.Count, Is.Zero);
                 Assert.That(firstCallbackCount, Is.EqualTo(1));
@@ -125,7 +120,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     await UniTask.Yield();
                 }
 
-                Assert.That(modal.Handle.IsValid, Is.False);
                 Assert.That(container.Count, Is.Zero);
                 Assert.That(hasResult, Is.False);
                 Assert.That(result, Is.Null);
