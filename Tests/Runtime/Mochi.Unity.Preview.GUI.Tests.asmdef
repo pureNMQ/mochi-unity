@@ -3,7 +3,9 @@
     "rootNamespace": "Mochi.Unity.Preview.GUI.Tests",
     "references": [
         "Mochi.Unity",
-        "UniTask"
+        "UniTask",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI"
     ],
     "optionalUnityReferences": [
         "TestAssemblies"
