@@ -149,11 +149,6 @@ namespace Mochi.Unity.Preview.GUI
             IsBusy = true;
             StackEntry currentEntry = GetStackEntry(StackCount - 1);
             StackEntry previousEntry = GetStackEntry(StackCount - 2);
-            GameObject currentFocus = EventSystem.current == null
-                ? currentEntry.Panel.DefaultFocusTarget
-                : EventSystem.current.currentSelectedGameObject ?? currentEntry.Panel.DefaultFocusTarget;
-            bool currentPageHidden = false;
-            bool currentPageClosed = false;
             CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
@@ -165,9 +160,7 @@ namespace Mochi.Unity.Preview.GUI
                 await RunExitTransitionAsync(currentEntry.Panel, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 currentEntry.Panel.HideInternal();
-                currentPageHidden = true;
                 currentEntry.Panel.CloseInternal();
-                currentPageClosed = true;
 
                 Loader.Release(currentEntry.Prefab);
                 Destroy(currentEntry.Panel.gameObject);
@@ -176,54 +169,10 @@ namespace Mochi.Unity.Preview.GUI
                 previousEntry.Panel.SetInteractionEnabledInternal(true);
                 return true;
             }
-            catch
-            {
-                if (!currentPageClosed)
-                {
-                    RollbackBack(currentEntry, previousEntry, currentFocus, currentPageHidden);
-                }
-                else
-                {
-                    RemoveStackEntryAt(StackCount - 1);
-                    Destroy(currentEntry.Panel.gameObject);
-                    previousEntry.Panel.SetInteractionEnabledInternal(true);
-                }
-
-                throw;
-            }
             finally
             {
                 IsBusy = false;
             }
-        }
-
-        private static void RollbackBack(
-            StackEntry currentEntry,
-            StackEntry previousEntry,
-            GameObject currentFocus,
-            bool currentPageHidden)
-        {
-            if (previousEntry.Panel.IsVisible)
-            {
-                previousEntry.Panel.HideInternal();
-            }
-            else
-            {
-                previousEntry.Panel.RestoreHiddenInternal();
-            }
-
-            previousEntry.Panel.SetInteractionEnabledInternal(false);
-
-            if (currentPageHidden || !currentEntry.Panel.IsVisible)
-            {
-                currentEntry.Panel.ShowInternal();
-            }
-            else
-            {
-                currentEntry.Panel.FocusInternal(currentFocus ?? currentEntry.Panel.DefaultFocusTarget);
-            }
-
-            currentEntry.Panel.SetInteractionEnabledInternal(true);
         }
 
         public async UniTask<bool> CloseAsync()
