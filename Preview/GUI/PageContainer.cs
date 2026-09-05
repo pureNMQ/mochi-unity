@@ -54,7 +54,6 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (previousEntry != null)
                 {
-                    previousPage.SaveFocusInternal();
                     previousPage.SetInteractionEnabledInternal(false);
                 }
 
@@ -101,7 +100,7 @@ namespace Mochi.Unity.Preview.GUI
                 await RollbackPushAsync(prefab, page);
                 if (previousPage != null)
                 {
-                    if (previousWasVisible && !previousPage.IsVisible)
+                    if (previousWasVisible)
                     {
                         previousPage.ShowInternal();
                     }

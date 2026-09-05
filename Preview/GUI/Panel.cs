@@ -27,9 +27,13 @@ namespace Mochi.Unity.Preview.GUI
 
         internal void ShowInternal()
         {
-            gameObject.SetActive(true);
-            OnShow();
-            IsVisible = true;
+            if (!IsVisible)
+            {
+                gameObject.SetActive(true);
+                OnShow();
+                IsVisible = true;
+            }
+
             RestoreFocusInternal();
         }
 
@@ -55,6 +59,11 @@ namespace Mochi.Unity.Preview.GUI
 
         internal void SetInteractionEnabledInternal(bool enabled)
         {
+            if (!enabled && IsVisible)
+            {
+                SaveFocusInternal();
+            }
+
             CanvasGroup canvasGroup = GetComponent<CanvasGroup>();
             if (canvasGroup == null)
             {
@@ -70,14 +79,14 @@ namespace Mochi.Unity.Preview.GUI
             FocusInternal(defaultFocusTarget);
         }
 
-        internal void SaveFocusInternal()
+        private void SaveFocusInternal()
         {
             savedFocusTarget = EventSystem.current == null
                 ? null
                 : EventSystem.current.currentSelectedGameObject;
         }
 
-        internal void RestoreFocusInternal()
+        private void RestoreFocusInternal()
         {
             FocusInternal(savedFocusTarget ?? defaultFocusTarget);
         }
