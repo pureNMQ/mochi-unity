@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
@@ -112,7 +111,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 await UniTask.Yield();
                 UniTask<TestPage> secondPush = container.PushAsync<TestPage>("second-page");
 
-                AssertBusyIfExposed(container, true);
+                Assert.That(container.IsBusy, Is.True);
                 loader.Complete();
 
                 TestPage firstPage = await firstPush;
@@ -121,7 +120,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(firstPage, Is.Not.Null);
                 Assert.That(secondPage, Is.Null);
                 Assert.That(loader.LoadCount, Is.EqualTo(1));
-                AssertBusyIfExposed(container, false);
+                Assert.That(container.IsBusy, Is.False);
             });
         }
 
@@ -143,7 +142,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 {
                 }
 
-                AssertBusyIfExposed(container, false);
+                Assert.That(container.IsBusy, Is.False);
             });
         }
 
@@ -174,15 +173,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(secondPage, Is.Not.Null);
                 Assert.That(loader.LoadCount, Is.EqualTo(2));
             });
-        }
-
-        private static void AssertBusyIfExposed(PageContainer container, bool expected)
-        {
-            PropertyInfo property = typeof(PageContainer).GetProperty("IsBusy");
-            if (property != null)
-            {
-                Assert.That(property.GetValue(container), Is.EqualTo(expected));
-            }
         }
 
         private GameObject Track(GameObject target)

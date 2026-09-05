@@ -94,6 +94,34 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
+        public IEnumerator ResultCallbackRunsAfterBusyClearsAndCanPushAnotherModal()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                ModalContainer container = CreateContainer(out RecordingLoader loader);
+                bool busyAtCallback = true;
+                UniTask<NoDataModal> nextPush = default;
+                NoDataModal current = await container.PushAsync<NoDataModal, string>(
+                    "current",
+                    new ModalResultCallback<string>((hasResult, result) =>
+                    {
+                        busyAtCallback = container.IsBusy;
+                        nextPush = container.PushAsync<NoDataModal, string>("next");
+                    }));
+
+                Assert.That(await current.CompleteResultAsync("accepted"), Is.True);
+                NoDataModal next = await nextPush;
+
+                Assert.That(busyAtCallback, Is.False);
+                Assert.That(next, Is.Not.Null);
+                Assert.That(container.Current, Is.SameAs(next));
+                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(await container.CloseAsync(), Is.True);
+                Assert.That(loader.ReleaseCount, Is.EqualTo(2));
+            });
+        }
+
+        [UnityTest]
         public IEnumerator BackdropClick_WhenEnabled_CancelsOnlyCurrentModal()
         {
             return UniTask.ToCoroutine(async () =>
@@ -115,10 +143,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     .GetComponent<IPointerClickHandler>();
                 backdrop.OnPointerClick(new PointerEventData(EventSystem.current));
 
-                for (int frame = 0; frame < 120 && container.Count > 0; frame++)
-                {
-                    await UniTask.Yield();
-                }
+                await UniTask.WaitUntil(() => container.Count == 0)
+                    .Timeout(TimeSpan.FromSeconds(2));
 
                 Assert.That(container.Count, Is.Zero);
                 Assert.That(hasResult, Is.False);

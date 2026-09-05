@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -7,27 +6,11 @@ using UnityEngine.EventSystems;
 
 namespace Mochi.Unity.Preview.GUI
 {
-    public class PageContainer : PanelContainer
+    public class PageContainer : StackContainer
     {
-        private readonly List<PageStackItem> pages = new List<PageStackItem>();
-        private readonly CancellationTokenSource lifetimeCancellation = new CancellationTokenSource();
-        private IPanelLoader loader;
-        private bool isDisposed;
-
-        public int Count => pages.Count;
-        public IPanel Current => pages.Count > 0 ? pages[pages.Count - 1].Page : null;
-        public bool CanGoBack => !IsBusy && pages.Count > 1;
-        public bool IsBusy { get; private set; }
-
-        public void Initialize(IPanelLoader panelLoader)
-        {
-            if (isDisposed)
-            {
-                throw new ObjectDisposedException(nameof(PageContainer));
-            }
-
-            loader = panelLoader ?? throw new ArgumentNullException(nameof(panelLoader));
-        }
+        public int Count => StackCount;
+        public IPanel Current => StackCount > 0 ? GetStackEntry(StackCount - 1).Panel : null;
+        public bool CanGoBack => !IsBusy && StackCount > 1;
 
         public UniTask<TPage> PushAsync<TPage>(string key) where TPage : Panel
         {
@@ -45,12 +28,12 @@ namespace Mochi.Unity.Preview.GUI
             Func<TPage, CancellationToken, UniTask> prepareAsync)
             where TPage : Panel
         {
-            if (isDisposed)
+            if (IsDisposed)
             {
                 return null;
             }
 
-            if (loader == null)
+            if (Loader == null)
             {
                 throw new InvalidOperationException("PageContainer must be initialized before pushing a page.");
             }
@@ -61,14 +44,14 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             IsBusy = true;
-            PageStackItem previousEntry = pages.Count > 0 ? pages[pages.Count - 1] : null;
+            StackEntry previousEntry = StackCount > 0 ? GetStackEntry(StackCount - 1) : null;
             Panel previousPage = previousEntry?.Page;
             bool previousWasVisible = previousPage != null && previousPage.IsVisible;
             GameObject prefab = null;
             TPage page = null;
             bool pageEntered = false;
             bool committed = false;
-            CancellationToken cancellationToken = lifetimeCancellation.Token;
+            CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
             {
@@ -80,7 +63,7 @@ namespace Mochi.Unity.Preview.GUI
                     previousPage.SetInteractionEnabledInternal(false);
                 }
 
-                prefab = await loader.LoadAsync(key, cancellationToken);
+                prefab = await Loader.LoadAsync(key, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (prefab == null)
                 {
@@ -93,8 +76,9 @@ namespace Mochi.Unity.Preview.GUI
                 if (page == null)
                 {
                     Destroy(instance);
-                    loader.Release(prefab);
+                    GameObject loadedPrefab = prefab;
                     prefab = null;
+                    Loader.Release(loadedPrefab);
                     return null;
                 }
 
@@ -115,7 +99,7 @@ namespace Mochi.Unity.Preview.GUI
 
                 page.SetInteractionEnabledInternal(true);
                 page.FocusDefaultInternal();
-                pages.Add(new PageStackItem(page, prefab));
+                AddStackEntry(page, prefab);
                 committed = true;
                 return page;
             }
@@ -168,7 +152,7 @@ namespace Mochi.Unity.Preview.GUI
 
             if (prefab != null)
             {
-                TryCleanup(() => loader.Release(prefab));
+                TryCleanup(() => Loader.Release(prefab));
             }
         }
 
@@ -180,15 +164,15 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             IsBusy = true;
-            PageStackItem currentEntry = pages[pages.Count - 1];
-            PageStackItem previousEntry = pages[pages.Count - 2];
+            StackEntry currentEntry = GetStackEntry(StackCount - 1);
+            StackEntry previousEntry = GetStackEntry(StackCount - 2);
             GameObject currentFocus = EventSystem.current == null
                 ? currentEntry.Page.DefaultFocusTarget
                 : EventSystem.current.currentSelectedGameObject ?? currentEntry.Page.DefaultFocusTarget;
             currentEntry.SavedFocusTarget = currentFocus;
             bool currentPageHidden = false;
             bool currentPageClosed = false;
-            CancellationToken cancellationToken = lifetimeCancellation.Token;
+            CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
             {
@@ -203,9 +187,9 @@ namespace Mochi.Unity.Preview.GUI
                 currentEntry.Page.CloseInternal();
                 currentPageClosed = true;
 
-                loader.Release(currentEntry.Prefab);
+                Loader.Release(currentEntry.Prefab);
                 Destroy(currentEntry.Page.gameObject);
-                pages.RemoveAt(pages.Count - 1);
+                RemoveStackEntryAt(StackCount - 1);
 
                 previousEntry.Page.SetInteractionEnabledInternal(true);
                 previousEntry.Page.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Page.DefaultFocusTarget);
@@ -219,7 +203,7 @@ namespace Mochi.Unity.Preview.GUI
                 }
                 else
                 {
-                    pages.RemoveAt(pages.Count - 1);
+                    RemoveStackEntryAt(StackCount - 1);
                     TryCleanup(() => Destroy(currentEntry.Page.gameObject));
                     previousEntry.Page.SetInteractionEnabledInternal(true);
                     previousEntry.Page.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Page.DefaultFocusTarget);
@@ -234,8 +218,8 @@ namespace Mochi.Unity.Preview.GUI
         }
 
         private static void RollbackBack(
-            PageStackItem currentEntry,
-            PageStackItem previousEntry,
+            StackEntry currentEntry,
+            StackEntry previousEntry,
             GameObject currentFocus,
             bool currentPageHidden)
         {
@@ -261,17 +245,17 @@ namespace Mochi.Unity.Preview.GUI
 
         public async UniTask<bool> CloseAsync()
         {
-            if (isDisposed || IsBusy || pages.Count == 0)
+            if (IsDisposed || IsBusy || StackCount == 0)
             {
                 return false;
             }
 
             IsBusy = true;
-            PageStackItem topEntry = pages[pages.Count - 1];
+            StackEntry topEntry = GetStackEntry(StackCount - 1);
             GameObject topFocus = EventSystem.current == null
                 ? topEntry.Page.DefaultFocusTarget
                 : EventSystem.current.currentSelectedGameObject ?? topEntry.Page.DefaultFocusTarget;
-            CancellationToken cancellationToken = lifetimeCancellation.Token;
+            CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
             {
@@ -289,9 +273,9 @@ namespace Mochi.Unity.Preview.GUI
                 }
 
                 Exception firstException = null;
-                for (int index = pages.Count - 1; index >= 0; index--)
+                for (int index = StackCount - 1; index >= 0; index--)
                 {
-                    PageStackItem entry = pages[index];
+                    StackEntry entry = GetStackEntry(index);
                     if (entry.Page != null)
                     {
                         if (entry.Page.IsVisible)
@@ -309,11 +293,11 @@ namespace Mochi.Unity.Preview.GUI
 
                     if (entry.Prefab != null)
                     {
-                        CaptureCleanupException(() => loader.Release(entry.Prefab), ref firstException);
+                        CaptureCleanupException(() => Loader.Release(entry.Prefab), ref firstException);
                     }
                 }
 
-                pages.Clear();
+                ClearStackEntries();
                 if (firstException != null)
                 {
                     throw firstException;
@@ -327,20 +311,11 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        private void OnDestroy()
+        protected override void CleanupStackOnDestroy()
         {
-            if (isDisposed)
+            for (int index = StackCount - 1; index >= 0; index--)
             {
-                return;
-            }
-
-            isDisposed = true;
-            lifetimeCancellation.Cancel();
-            IsBusy = false;
-
-            for (int index = pages.Count - 1; index >= 0; index--)
-            {
-                PageStackItem entry = pages[index];
+                StackEntry entry = GetStackEntry(index);
                 if (entry.Page != null)
                 {
                     if (entry.Page.IsVisible)
@@ -356,63 +331,11 @@ namespace Mochi.Unity.Preview.GUI
                     TryCleanup(() => Destroy(entry.Page.gameObject));
                 }
 
-                if (loader != null && entry.Prefab != null)
+                if (Loader != null && entry.Prefab != null)
                 {
-                    TryCleanup(() => loader.Release(entry.Prefab));
+                    TryCleanup(() => Loader.Release(entry.Prefab));
                 }
             }
-
-            pages.Clear();
-            lifetimeCancellation.Dispose();
-        }
-
-        private static async UniTask TryCleanupAsync(Func<UniTask> action)
-        {
-            try
-            {
-                await action();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
-            }
-        }
-
-        private static void TryCleanup(Action action)
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
-            }
-        }
-
-        private static void CaptureCleanupException(Action action, ref Exception firstException)
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                firstException ??= exception;
-            }
-        }
-
-        private sealed class PageStackItem
-        {
-            public PageStackItem(Panel page, GameObject prefab)
-            {
-                Page = page;
-                Prefab = prefab;
-            }
-
-            public Panel Page { get; }
-            public GameObject Prefab { get; }
-            public GameObject SavedFocusTarget { get; set; }
         }
     }
 }

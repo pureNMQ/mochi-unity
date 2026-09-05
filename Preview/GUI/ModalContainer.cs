@@ -9,36 +9,26 @@ using UnityEngine.UI;
 
 namespace Mochi.Unity.Preview.GUI
 {
-    public sealed class ModalContainer : PanelContainer
+    public sealed class ModalContainer : StackContainer
     {
         [SerializeField] private Color backdropColor = new Color(0f, 0f, 0f, 0.55f);
         [SerializeField, Min(0f)] private float backdropFadeDuration = 0.2f;
 
-        private readonly List<ModalStackItem> modals = new List<ModalStackItem>();
-        private readonly CancellationTokenSource lifetimeCancellation = new CancellationTokenSource();
-        private IPanelLoader loader;
         private ModalBackdrop backdrop;
         private Image backdropImage;
         private CanvasGroup backdropCanvasGroup;
-        private bool isDisposed;
 
-        public int Count => modals.Count;
-        public ModalPanel Current => modals.Count == 0 ? null : modals[modals.Count - 1].Panel;
-        public bool IsBusy { get; private set; }
+        public int Count => StackCount;
+        public ModalPanel Current => StackCount == 0 ? null : (ModalPanel)GetStackEntry(StackCount - 1).Panel;
 
         private void Awake()
         {
             EnsureBackdrop();
         }
 
-        public void Initialize(IPanelLoader panelLoader)
+        public override void Initialize(IPanelLoader panelLoader)
         {
-            if (isDisposed)
-            {
-                throw new ObjectDisposedException(nameof(ModalContainer));
-            }
-
-            loader = panelLoader ?? throw new ArgumentNullException(nameof(panelLoader));
+            base.Initialize(panelLoader);
             EnsureBackdrop();
         }
 
@@ -103,19 +93,19 @@ namespace Mochi.Unity.Preview.GUI
             Action<TModal> bindCallback)
             where TModal : ModalPanel
         {
-            if (isDisposed || IsBusy)
+            if (IsDisposed || IsBusy)
             {
                 return null;
             }
 
-            if (loader == null)
+            if (Loader == null)
             {
                 throw new InvalidOperationException("ModalContainer must be initialized before pushing a modal.");
             }
 
             IsBusy = true;
             //获取当前焦点对象，确保在模态面板关闭后可以恢复焦点
-            ModalStackItem previousEntry = modals.Count == 0 ? null : modals[modals.Count - 1];
+            StackEntry previousEntry = StackCount == 0 ? null : GetStackEntry(StackCount - 1);
             GameObject previousFocus = EventSystem.current == null
                 ? previousEntry?.Panel.DefaultFocusTarget
                 : EventSystem.current.currentSelectedGameObject;
@@ -125,7 +115,7 @@ namespace Mochi.Unity.Preview.GUI
             TModal modal = null;
             bool modalEnterStarted = false;
             bool committed = false;
-            CancellationToken cancellationToken = lifetimeCancellation.Token;
+            CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
             {
@@ -138,7 +128,7 @@ namespace Mochi.Unity.Preview.GUI
 
                 EnsureBackdrop();
                 //加载预制体资源
-                prefab = await loader.LoadAsync(key, cancellationToken);
+                prefab = await Loader.LoadAsync(key, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (prefab == null)
                 {
@@ -154,7 +144,7 @@ namespace Mochi.Unity.Preview.GUI
                     Destroy(instance);
                     GameObject loadedPrefab = prefab;
                     prefab = null;
-                    loader.Release(loadedPrefab);
+                    Loader.Release(loadedPrefab);
                     return null;
                 }
 
@@ -181,7 +171,7 @@ namespace Mochi.Unity.Preview.GUI
 
                 modal.SetInteractionEnabledInternal(true);
                 modal.FocusDefaultInternal();
-                modals.Add(new ModalStackItem(modal, prefab));
+                AddStackEntry(modal, prefab);
                 committed = true;
                 return modal;
             }
@@ -231,34 +221,34 @@ namespace Mochi.Unity.Preview.GUI
 
             if (prefab != null)
             {
-                TryCleanup(() => loader.Release(prefab));
+                TryCleanup(() => Loader.Release(prefab));
             }
 
-            if (modals.Count == 0)
+            if (StackCount == 0)
             {
                 SetBackdropAlpha(0f);
                 SetBackdropRaycasts(false);
             }
             else
             {
-                MoveBackdropBelowPanel(modals[modals.Count - 1].Panel);
+                MoveBackdropBelowPanel(GetStackEntry(StackCount - 1).Panel);
                 SetBackdropRaycasts(true);
             }
         }
 
         public UniTask<bool> PopAsync(int count = 1)
         {
-            if (isDisposed || IsBusy || count < 1 || count > modals.Count)
+            if (IsDisposed || IsBusy || count < 1 || count > StackCount)
             {
                 return UniTask.FromResult(false);
             }
 
-            return PopEntriesAsync(modals.Count - count, false, null);
+            return PopEntriesAsync(StackCount - count, false, null);
         }
 
         public UniTask<bool> CloseAsync()
         {
-            if (isDisposed || IsBusy || modals.Count == 0)
+            if (IsDisposed || IsBusy || StackCount == 0)
             {
                 return UniTask.FromResult(false);
             }
@@ -268,27 +258,27 @@ namespace Mochi.Unity.Preview.GUI
 
         internal UniTask<bool> CancelAsync(ModalPanel modal)
         {
-            if (modal == null || !IsTop(modal) || isDisposed || IsBusy)
+            if (modal == null || !IsTop(modal) || IsDisposed || IsBusy)
             {
                 return UniTask.FromResult(false);
             }
 
-            return PopEntriesAsync(modals.Count - 1, false, null);
+            return PopEntriesAsync(StackCount - 1, false, null);
         }
 
         internal UniTask<bool> CompleteAsync<TResult>(ModalPanel<TResult> modal, TResult result)
         {
-            if (modal == null || !IsTop(modal) || isDisposed || IsBusy)
+            if (modal == null || !IsTop(modal) || IsDisposed || IsBusy)
             {
                 return UniTask.FromResult(false);
             }
 
-            return PopEntriesAsync(modals.Count - 1, true, result);
+            return PopEntriesAsync(StackCount - 1, true, result);
         }
 
         internal void HandleBackdropClick()
         {
-            if (isDisposed || IsBusy || modals.Count == 0 || !Current.CloseOnBackdropClick)
+            if (IsDisposed || IsBusy || StackCount == 0 || !Current.CloseOnBackdropClick)
             {
                 return;
             }
@@ -304,14 +294,14 @@ namespace Mochi.Unity.Preview.GUI
             IsBusy = true;
             if (removeStartIndex > 0)
             {
-                MoveBackdropBelowPanel(modals[removeStartIndex - 1].Panel);
+                MoveBackdropBelowPanel(GetStackEntry(removeStartIndex - 1).Panel);
             }
 
-            int removeCount = modals.Count - removeStartIndex;
-            List<ModalStackItem> removedEntries = new List<ModalStackItem>(removeCount);
-            for (int index = modals.Count - 1; index >= removeStartIndex; index--)
+            int removeCount = StackCount - removeStartIndex;
+            List<StackEntry> removedEntries = new List<StackEntry>(removeCount);
+            for (int index = StackCount - 1; index >= removeStartIndex; index--)
             {
-                ModalStackItem entry = modals[index];
+                StackEntry entry = GetStackEntry(index);
                 entry.Panel.SetInteractionEnabledInternal(false);
                 removedEntries.Add(entry);
             }
@@ -319,7 +309,7 @@ namespace Mochi.Unity.Preview.GUI
             GameObject currentFocus = EventSystem.current == null
                 ? removedEntries[0].Panel.DefaultFocusTarget
                 : EventSystem.current.currentSelectedGameObject ?? removedEntries[0].Panel.DefaultFocusTarget;
-            CancellationToken cancellationToken = lifetimeCancellation.Token;
+            CancellationToken cancellationToken = LifetimeCancellationToken;
             Exception transitionException = null;
 
             try
@@ -344,7 +334,7 @@ namespace Mochi.Unity.Preview.GUI
 
             if (transitionException != null)
             {
-                if (isDisposed)
+                if (IsDisposed)
                 {
                     IsBusy = false;
                     return false;
@@ -357,7 +347,7 @@ namespace Mochi.Unity.Preview.GUI
 
             Exception cleanupException = null;
             List<Action> notifications = new List<Action>(removedEntries.Count);
-            foreach (ModalStackItem entry in removedEntries)
+            foreach (StackEntry entry in removedEntries)
             {
                 if (entry.Panel.IsVisible || entry.Panel.gameObject.activeSelf)
                 {
@@ -369,28 +359,28 @@ namespace Mochi.Unity.Preview.GUI
                     CaptureCleanupException(entry.Panel.CloseInternal, ref cleanupException);
                 }
 
-                Action notification = entry.Panel.CaptureResultNotification(hasResult, result);
-                entry.Panel.Unbind();
+                Action notification = ((ModalPanel)entry.Panel).CaptureResultNotification(hasResult, result);
+                ((ModalPanel)entry.Panel).Unbind();
                 notifications.Add(notification);
                 CaptureCleanupException(() => Destroy(entry.Panel.gameObject), ref cleanupException);
 
                 if (entry.Prefab != null)
                 {
-                    CaptureCleanupException(() => loader.Release(entry.Prefab), ref cleanupException);
+                    CaptureCleanupException(() => Loader.Release(entry.Prefab), ref cleanupException);
                 }
             }
 
-            modals.RemoveRange(removeStartIndex, removeCount);
-            if (modals.Count == 0)
+            RemoveStackEntries(removeStartIndex, removeCount);
+            if (StackCount == 0)
             {
                 SetBackdropAlpha(0f);
                 SetBackdropRaycasts(false);
             }
             else
             {
-                MoveBackdropBelowPanel(modals[modals.Count - 1].Panel);
+                MoveBackdropBelowPanel(GetStackEntry(StackCount - 1).Panel);
                 SetBackdropRaycasts(true);
-                ModalStackItem nextTop = modals[modals.Count - 1];
+                StackEntry nextTop = GetStackEntry(StackCount - 1);
                 nextTop.Panel.SetInteractionEnabledInternal(true);
                 nextTop.Panel.FocusInternal(nextTop.SavedFocusTarget ?? nextTop.Panel.DefaultFocusTarget);
             }
@@ -410,14 +400,14 @@ namespace Mochi.Unity.Preview.GUI
         }
 
         private async UniTask RollbackPopAsync(
-            List<ModalStackItem> removedEntries,
+            List<StackEntry> removedEntries,
             GameObject currentFocus)
         {
             SetBackdropAlpha(1f);
             SetBackdropRaycasts(true);
             MoveBackdropBelowPanel(removedEntries[0].Panel);
 
-            foreach (ModalStackItem entry in removedEntries)
+            foreach (StackEntry entry in removedEntries)
             {
                 if (!entry.Panel.gameObject.activeSelf || !entry.Panel.IsVisible)
                 {
@@ -428,7 +418,7 @@ namespace Mochi.Unity.Preview.GUI
                 entry.Panel.SetInteractionEnabledInternal(false);
             }
 
-            ModalStackItem currentEntry = removedEntries[0];
+            StackEntry currentEntry = removedEntries[0];
             currentEntry.Panel.SetInteractionEnabledInternal(true);
             currentEntry.Panel.FocusInternal(currentFocus ?? currentEntry.Panel.DefaultFocusTarget);
         }
@@ -525,24 +515,16 @@ namespace Mochi.Unity.Preview.GUI
 
         private bool IsTop(ModalPanel modal)
         {
-            return modals.Count > 0 && ReferenceEquals(Current, modal);
+            return StackCount > 0 && ReferenceEquals(Current, modal);
         }
 
-        private void OnDestroy()
+        protected override void CleanupStackOnDestroy()
         {
-            if (isDisposed)
-            {
-                return;
-            }
+            List<Action> notifications = new List<Action>(StackCount);
 
-            isDisposed = true;
-            lifetimeCancellation.Cancel();
-            IsBusy = false;
-            List<Action> notifications = new List<Action>(modals.Count);
-
-            for (int index = modals.Count - 1; index >= 0; index--)
+            for (int index = StackCount - 1; index >= 0; index--)
             {
-                ModalStackItem entry = modals[index];
+                StackEntry entry = GetStackEntry(index);
                 if (entry.Panel != null)
                 {
                     if (entry.Panel.IsVisible || entry.Panel.gameObject.activeSelf)
@@ -554,71 +536,20 @@ namespace Mochi.Unity.Preview.GUI
                     {
                         TryCleanup(entry.Panel.CloseInternal);
                     }
-                    notifications.Add(entry.Panel.CaptureResultNotification(false, null));
-                    entry.Panel.Unbind();
+                    notifications.Add(((ModalPanel)entry.Panel).CaptureResultNotification(false, null));
+                    ((ModalPanel)entry.Panel).Unbind();
                     TryCleanup(() => Destroy(entry.Panel.gameObject));
                 }
 
-                if (loader != null && entry.Prefab != null)
+                if (Loader != null && entry.Prefab != null)
                 {
-                    TryCleanup(() => loader.Release(entry.Prefab));
+                    TryCleanup(() => Loader.Release(entry.Prefab));
                 }
             }
 
-            modals.Clear();
-            lifetimeCancellation.Dispose();
             foreach (Action notification in notifications)
             {
                 notification?.Invoke();
-            }
-        }
-
-        private sealed class ModalStackItem
-        {
-            public ModalStackItem(ModalPanel panel, GameObject prefab)
-            {
-                Panel = panel;
-                Prefab = prefab;
-            }
-
-            public ModalPanel Panel { get; }
-            public GameObject Prefab { get; }
-            public GameObject SavedFocusTarget { get; set; }
-        }
-
-        private static async UniTask TryCleanupAsync(Func<UniTask> action)
-        {
-            try
-            {
-                await action();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
-            }
-        }
-
-        private static void TryCleanup(Action action)
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
-            }
-        }
-
-        private static void CaptureCleanupException(Action action, ref Exception firstException)
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                firstException ??= exception;
             }
         }
     }
