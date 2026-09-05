@@ -113,7 +113,7 @@ namespace Mochi.Unity.Preview.GUI
                 {
                     if (previousWasVisible && !previousPage.IsVisible)
                     {
-                        TryCleanup(previousPage.ShowInternal);
+                        previousPage.ShowInternal();
                     }
 
                     previousPage.SetInteractionEnabledInternal(previousWasVisible);
@@ -133,25 +133,25 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (pageEntered)
                 {
-                    await TryCleanupAsync(() => RunExitTransitionAsync(page, CancellationToken.None));
+                    await RunExitTransitionAsync(page, CancellationToken.None);
                 }
 
                 if (page.IsVisible)
                 {
-                    TryCleanup(page.HideInternal);
+                    page.HideInternal();
                 }
 
                 if (page.IsOpen)
                 {
-                    TryCleanup(page.CloseInternal);
+                    page.CloseInternal();
                 }
 
-                TryCleanup(() => Destroy(page.gameObject));
+                Destroy(page.gameObject);
             }
 
             if (prefab != null)
             {
-                TryCleanup(() => Loader.Release(prefab));
+                Loader.Release(prefab);
             }
         }
 
@@ -203,7 +203,7 @@ namespace Mochi.Unity.Preview.GUI
                 else
                 {
                     RemoveStackEntryAt(StackCount - 1);
-                    TryCleanup(() => Destroy(currentEntry.Panel.gameObject));
+                    Destroy(currentEntry.Panel.gameObject);
                     previousEntry.Panel.SetInteractionEnabledInternal(true);
                     previousEntry.Panel.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Panel.DefaultFocusTarget);
                 }
@@ -224,7 +224,7 @@ namespace Mochi.Unity.Preview.GUI
         {
             if (previousEntry.Panel.IsVisible)
             {
-                TryCleanup(previousEntry.Panel.HideInternal);
+                previousEntry.Panel.HideInternal();
             }
             else
             {
@@ -235,7 +235,7 @@ namespace Mochi.Unity.Preview.GUI
 
             if (currentPageHidden || !currentEntry.Panel.IsVisible)
             {
-                TryCleanup(currentEntry.Panel.ShowInternal);
+                currentEntry.Panel.ShowInternal();
             }
 
             currentEntry.Panel.SetInteractionEnabledInternal(true);
@@ -271,7 +271,6 @@ namespace Mochi.Unity.Preview.GUI
                     throw;
                 }
 
-                Exception firstException = null;
                 for (int index = StackCount - 1; index >= 0; index--)
                 {
                     StackEntry entry = GetStackEntry(index);
@@ -279,29 +278,24 @@ namespace Mochi.Unity.Preview.GUI
                     {
                         if (entry.Panel.IsVisible)
                         {
-                            CaptureCleanupException(entry.Panel.HideInternal, ref firstException);
+                            entry.Panel.HideInternal();
                         }
 
                         if (entry.Panel.IsOpen)
                         {
-                            CaptureCleanupException(entry.Panel.CloseInternal, ref firstException);
+                            entry.Panel.CloseInternal();
                         }
 
-                        CaptureCleanupException(() => Destroy(entry.Panel.gameObject), ref firstException);
+                        Destroy(entry.Panel.gameObject);
                     }
 
                     if (entry.Prefab != null)
                     {
-                        CaptureCleanupException(() => Loader.Release(entry.Prefab), ref firstException);
+                        Loader.Release(entry.Prefab);
                     }
                 }
 
                 ClearStackEntries();
-                if (firstException != null)
-                {
-                    throw firstException;
-                }
-
                 return true;
             }
             finally
@@ -319,20 +313,20 @@ namespace Mochi.Unity.Preview.GUI
                 {
                     if (entry.Panel.IsVisible)
                     {
-                        TryCleanup(entry.Panel.HideInternal);
+                        entry.Panel.HideInternal();
                     }
 
                     if (entry.Panel.IsOpen)
                     {
-                        TryCleanup(entry.Panel.CloseInternal);
+                        entry.Panel.CloseInternal();
                     }
 
-                    TryCleanup(() => Destroy(entry.Panel.gameObject));
+                    Destroy(entry.Panel.gameObject);
                 }
 
                 if (Loader != null && entry.Prefab != null)
                 {
-                    TryCleanup(() => Loader.Release(entry.Prefab));
+                    Loader.Release(entry.Prefab);
                 }
             }
         }

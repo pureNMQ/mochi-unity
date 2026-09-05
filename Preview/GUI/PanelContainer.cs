@@ -49,42 +49,6 @@ namespace Mochi.Unity.Preview.GUI
                 : transition.ExitAsync(cancellationToken);
         }
 
-        protected static async UniTask TryCleanupAsync(Func<UniTask> action)
-        {
-            try
-            {
-                await action();
-            }
-            catch (Exception exception)
-            {
-                UnityEngine.Debug.LogException(exception);
-            }
-        }
-
-        protected static void TryCleanup(Action action)
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                UnityEngine.Debug.LogException(exception);
-            }
-        }
-
-        protected static void CaptureCleanupException(Action action, ref Exception firstException)
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                firstException ??= exception;
-            }
-        }
-
         protected virtual void OnDestroy()
         {
             IsDisposed = true;

@@ -202,26 +202,26 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (modalEnterStarted)
                 {
-                    await TryCleanupAsync(() => RunExitTransitionAsync(modal, CancellationToken.None));
+                    await RunExitTransitionAsync(modal, CancellationToken.None);
                 }
 
                 if (modal.IsVisible || modal.gameObject.activeSelf)
                 {
-                    TryCleanup(modal.HideInternal);
+                    modal.HideInternal();
                 }
 
                 if (modal.IsOpen)
                 {
-                    TryCleanup(modal.CloseInternal);
+                    modal.CloseInternal();
                 }
 
                 modal.Unbind();
-                TryCleanup(() => Destroy(modal.gameObject));
+                Destroy(modal.gameObject);
             }
 
             if (prefab != null)
             {
-                TryCleanup(() => Loader.Release(prefab));
+                Loader.Release(prefab);
             }
 
             if (StackCount == 0)
@@ -345,28 +345,27 @@ namespace Mochi.Unity.Preview.GUI
                 ExceptionDispatchInfo.Capture(transitionException).Throw();
             }
 
-            Exception cleanupException = null;
             List<Action> notifications = new List<Action>(removedEntries.Count);
             foreach (StackEntry entry in removedEntries)
             {
                 if (entry.Panel.IsVisible || entry.Panel.gameObject.activeSelf)
                 {
-                    CaptureCleanupException(entry.Panel.HideInternal, ref cleanupException);
+                    entry.Panel.HideInternal();
                 }
 
                 if (entry.Panel.IsOpen)
                 {
-                    CaptureCleanupException(entry.Panel.CloseInternal, ref cleanupException);
+                    entry.Panel.CloseInternal();
                 }
 
                 Action notification = ((ModalPanel)entry.Panel).CaptureResultNotification(hasResult, result);
                 ((ModalPanel)entry.Panel).Unbind();
                 notifications.Add(notification);
-                CaptureCleanupException(() => Destroy(entry.Panel.gameObject), ref cleanupException);
+                Destroy(entry.Panel.gameObject);
 
                 if (entry.Prefab != null)
                 {
-                    CaptureCleanupException(() => Loader.Release(entry.Prefab), ref cleanupException);
+                    Loader.Release(entry.Prefab);
                 }
             }
 
@@ -391,11 +390,6 @@ namespace Mochi.Unity.Preview.GUI
                 notification?.Invoke();
             }
 
-            if (cleanupException != null)
-            {
-                ExceptionDispatchInfo.Capture(cleanupException).Throw();
-            }
-
             return true;
         }
 
@@ -411,10 +405,10 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (!entry.Panel.gameObject.activeSelf || !entry.Panel.IsVisible)
                 {
-                    TryCleanup(entry.Panel.ShowInternal);
+                    entry.Panel.ShowInternal();
                 }
 
-                await TryCleanupAsync(() => RunEnterTransitionAsync(entry.Panel, CancellationToken.None));
+                await RunEnterTransitionAsync(entry.Panel, CancellationToken.None);
                 entry.Panel.SetInteractionEnabledInternal(false);
             }
 
@@ -529,21 +523,21 @@ namespace Mochi.Unity.Preview.GUI
                 {
                     if (entry.Panel.IsVisible || entry.Panel.gameObject.activeSelf)
                     {
-                        TryCleanup(entry.Panel.HideInternal);
+                        entry.Panel.HideInternal();
                     }
 
                     if (entry.Panel.IsOpen)
                     {
-                        TryCleanup(entry.Panel.CloseInternal);
+                        entry.Panel.CloseInternal();
                     }
                     notifications.Add(((ModalPanel)entry.Panel).CaptureResultNotification(false, null));
                     ((ModalPanel)entry.Panel).Unbind();
-                    TryCleanup(() => Destroy(entry.Panel.gameObject));
+                    Destroy(entry.Panel.gameObject);
                 }
 
                 if (Loader != null && entry.Prefab != null)
                 {
-                    TryCleanup(() => Loader.Release(entry.Prefab));
+                    Loader.Release(entry.Prefab);
                 }
             }
 
