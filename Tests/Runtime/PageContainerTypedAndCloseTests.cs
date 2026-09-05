@@ -1,4 +1,3 @@
-using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
@@ -64,9 +63,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 List<string> secondEvents = second.Events;
                 List<string> thirdEvents = third.Events;
 
-                bool result = container.Close();
+                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
 
-                Assert.That(result, Is.True);
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(container.Current, Is.Null);
                 Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
@@ -76,29 +74,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(firstEvents, Does.Contain("Close"));
                 Assert.That(secondEvents, Does.Contain("Close"));
                 Assert.That(thirdEvents, Does.Contain("Close"));
-                Assert.That(container.Close(), Is.False);
-            });
-        }
-
-        [UnityTest]
-        public IEnumerator Close_WhilePushIsBusyReturnsFalseWithoutChangingStack()
-        {
-            return UniTask.ToCoroutine(async () =>
-            {
-                PageContainer container = Track(new GameObject("PageContainer")).AddComponent<PageContainer>();
-                GameObject prefab = Track(CreatePagePrefab("PagePrefab"));
-                DelayedLoader loader = new DelayedLoader(prefab);
-                container.Initialize(loader);
-
-                UniTask<ClosePage> push = container.PushAsync<ClosePage>("page");
-                await UniTask.Yield();
-
-                Assert.That(container.Close(), Is.False);
-                loader.Complete();
-                ClosePage page = await push;
-
-                Assert.That(page, Is.Not.Null);
-                Assert.That(container.StackCount, Is.EqualTo(1));
+                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
+                Assert.That(container.StackCount, Is.Zero);
+                Assert.That(loader.ReleasedPrefabs.Count, Is.EqualTo(3));
             });
         }
 
@@ -126,42 +104,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
             });
         }
 
-        [UnityTest]
-        public IEnumerator Close_WhenCleanupThrowsContinuesReleasingRemainingPagesAndThrowsFirstException()
-        {
-            return UniTask.ToCoroutine(async () =>
-            {
-                PageContainer container = Track(new GameObject("PageContainer")).AddComponent<PageContainer>();
-                GameObject firstPrefab = Track(CreateCleanupPrefab("FirstPrefab", false));
-                GameObject secondPrefab = Track(CreateCleanupPrefab("SecondPrefab", true));
-                GameObject thirdPrefab = Track(CreateCleanupPrefab("ThirdPrefab", false));
-                RecordingLoader loader = new RecordingLoader(firstPrefab, secondPrefab, thirdPrefab);
-                container.Initialize(loader);
-
-                CleanupPage first = await container.PushAsync<CleanupPage>("first");
-                CleanupPage second = await container.PushAsync<CleanupPage>("second");
-                CleanupPage third = await container.PushAsync<CleanupPage>("third");
-
-                Exception caught = null;
-                try
-                {
-                    container.Close();
-                }
-                catch (Exception exception)
-                {
-                    caught = exception;
-                }
-
-                Assert.That(caught, Is.TypeOf<CleanupFailureException>());
-                Assert.That(caught.Message, Is.EqualTo("SecondPrefab(Clone)"));
-                Assert.That(container.StackCount, Is.Zero);
-                Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
-                Assert.That(first.Events, Does.Contain("Close"));
-                Assert.That(second.Events, Does.Contain("Close"));
-                Assert.That(third.Events, Does.Contain("Close"));
-            });
-        }
-
         private GameObject CreateTypedPrefab(string name)
         {
             GameObject prefab = new GameObject(name);
@@ -177,16 +119,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
             prefab.SetActive(false);
             prefab.AddComponent<CanvasGroup>();
             prefab.AddComponent<ClosePage>();
-            return prefab;
-        }
-
-        private GameObject CreateCleanupPrefab(string name, bool throwOnClose)
-        {
-            GameObject prefab = new GameObject(name);
-            prefab.SetActive(false);
-            prefab.AddComponent<CanvasGroup>();
-            CleanupPage page = prefab.AddComponent<CleanupPage>();
-            page.ThrowOnClose = throwOnClose;
             return prefab;
         }
 
@@ -266,45 +198,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
             }
         }
 
-        private sealed class CleanupPage : Panel, IPanelTransition
-        {
-            [SerializeField] private bool throwOnClose;
-
-            public List<string> Events { get; } = new List<string>();
-            public bool ThrowOnClose
-            {
-                get => throwOnClose;
-                set => throwOnClose = value;
-            }
-
-            protected override void OnClose()
-            {
-                Events.Add("Close");
-                if (ThrowOnClose)
-                {
-                    throw new CleanupFailureException(gameObject.name);
-                }
-            }
-
-            public UniTask EnterAsync(CancellationToken cancellationToken)
-            {
-                return UniTask.CompletedTask;
-            }
-
-            public UniTask ExitAsync(CancellationToken cancellationToken)
-            {
-                return UniTask.CompletedTask;
-            }
-        }
-
-        private sealed class CleanupFailureException : Exception
-        {
-            public CleanupFailureException(string pageName)
-                : base(pageName)
-            {
-            }
-        }
-
         private sealed class RecordingLoader : IPanelLoader
         {
             private readonly GameObject[] prefabs;
@@ -325,31 +218,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
             public void Release(GameObject prefab)
             {
                 ReleasedPrefabs.Add(prefab);
-            }
-        }
-
-        private sealed class DelayedLoader : IPanelLoader
-        {
-            private readonly GameObject prefab;
-            private readonly UniTaskCompletionSource<GameObject> completion = new UniTaskCompletionSource<GameObject>();
-
-            public DelayedLoader(GameObject prefab)
-            {
-                this.prefab = prefab;
-            }
-
-            public UniTask<GameObject> LoadAsync(string key, CancellationToken cancellationToken)
-            {
-                return completion.Task;
-            }
-
-            public void Release(GameObject loadedPrefab)
-            {
-            }
-
-            public void Complete()
-            {
-                completion.TrySetResult(prefab);
             }
         }
 

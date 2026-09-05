@@ -174,13 +174,8 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        public bool Close()
+        protected override void OnClose()
         {
-            if (IsDisposed || IsBusy || StackCount == 0)
-            {
-                return false;
-            }
-
             IsBusy = true;
             try
             {
@@ -209,7 +204,7 @@ namespace Mochi.Unity.Preview.GUI
                 }
 
                 ClearStackEntries();
-                return true;
+                base.OnClose();
             }
             finally
             {

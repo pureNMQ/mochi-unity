@@ -230,13 +230,8 @@ namespace Mochi.Unity.Preview.GUI
             return PopEntriesAsync(StackCount - count, false, null);
         }
 
-        public bool Close()
+        protected override void OnClose()
         {
-            if (IsDisposed || IsBusy || StackCount == 0)
-            {
-                return false;
-            }
-
             IsBusy = true;
             List<Action> notifications = new List<Action>(StackCount);
             try
@@ -281,7 +276,7 @@ namespace Mochi.Unity.Preview.GUI
                 notification?.Invoke();
             }
 
-            return true;
+            base.OnClose();
         }
         internal UniTask<bool> CancelAsync(ModalPanel modal)
         {

@@ -111,7 +111,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(transition.EnterCount, Is.EqualTo(1));
 
-                Assert.That(container.Close(), Is.True);
+                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
                 Assert.That(transition.ExitCount, Is.Zero);
             });
         }
