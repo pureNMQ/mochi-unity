@@ -48,8 +48,6 @@ namespace Mochi.Unity.Preview.GUI
             bool previousWasVisible = previousPage != null && previousPage.IsVisible;
             GameObject prefab = null;
             TPage page = null;
-            bool pageEntered = false;
-            bool committed = false;
             CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
@@ -89,7 +87,6 @@ namespace Mochi.Unity.Preview.GUI
 
                 await RunEnterTransitionAsync(page, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                pageEntered = true;
 
                 if (previousPage != null)
                 {
@@ -99,17 +96,16 @@ namespace Mochi.Unity.Preview.GUI
                 page.SetInteractionEnabledInternal(true);
                 page.FocusDefaultInternal();
                 AddStackEntry(page, prefab);
-                committed = true;
                 return page;
             }
             catch
             {
-                await RollbackPushAsync(prefab, page, pageEntered);
+                await RollbackPushAsync(prefab, page);
                 throw;
             }
             finally
             {
-                if (!committed && previousPage != null)
+                if (previousPage != null)
                 {
                     if (previousWasVisible && !previousPage.IsVisible)
                     {
@@ -127,15 +123,10 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        private async UniTask RollbackPushAsync(GameObject prefab, Panel page, bool pageEntered)
+        private async UniTask RollbackPushAsync(GameObject prefab, Panel page)
         {
             if (page != null)
             {
-                if (pageEntered)
-                {
-                    await RunExitTransitionAsync(page, CancellationToken.None);
-                }
-
                 if (page.IsVisible)
                 {
                     page.HideInternal();

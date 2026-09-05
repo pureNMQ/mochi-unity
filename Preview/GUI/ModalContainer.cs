@@ -113,7 +113,6 @@ namespace Mochi.Unity.Preview.GUI
 
             GameObject prefab = null;
             TModal modal = null;
-            bool modalEnterStarted = false;
             bool committed = false;
             CancellationToken cancellationToken = LifetimeCancellationToken;
 
@@ -161,7 +160,6 @@ namespace Mochi.Unity.Preview.GUI
                 MoveBackdropBelowPanel(modal);
 
                 //backdrop动画和panel进入动画同时执行
-                modalEnterStarted = true;
                 UniTask enterTask = RunEnterTransitionAsync(modal, cancellationToken);
                 UniTask backdropTask = previousEntry == null
                     ? FadeBackdropAsync(1f, cancellationToken)
@@ -177,7 +175,7 @@ namespace Mochi.Unity.Preview.GUI
             }
             catch
             {
-                await RollbackPushAsync(prefab, modal, modalEnterStarted);
+                await RollbackPushAsync(prefab, modal);
                 throw;
             }
             finally
@@ -195,16 +193,10 @@ namespace Mochi.Unity.Preview.GUI
 
         private async UniTask RollbackPushAsync(
             GameObject prefab,
-            ModalPanel modal,
-            bool modalEnterStarted)
+            ModalPanel modal)
         {
             if (modal != null)
             {
-                if (modalEnterStarted)
-                {
-                    await RunExitTransitionAsync(modal, CancellationToken.None);
-                }
-
                 if (modal.IsVisible || modal.gameObject.activeSelf)
                 {
                     modal.HideInternal();
