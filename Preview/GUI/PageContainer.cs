@@ -54,9 +54,7 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (previousEntry != null)
                 {
-                    previousEntry.SavedFocusTarget = EventSystem.current == null
-                        ? null
-                        : EventSystem.current.currentSelectedGameObject;
+                    previousPage.SaveFocusInternal();
                     previousPage.SetInteractionEnabledInternal(false);
                 }
 
@@ -109,10 +107,6 @@ namespace Mochi.Unity.Preview.GUI
                     }
 
                     previousPage.SetInteractionEnabledInternal(previousWasVisible);
-                    if (previousWasVisible)
-                    {
-                        previousPage.FocusInternal(previousEntry.SavedFocusTarget ?? previousPage.DefaultFocusTarget);
-                    }
                 }
 
                 throw;
@@ -159,7 +153,6 @@ namespace Mochi.Unity.Preview.GUI
             GameObject currentFocus = EventSystem.current == null
                 ? currentEntry.Panel.DefaultFocusTarget
                 : EventSystem.current.currentSelectedGameObject ?? currentEntry.Panel.DefaultFocusTarget;
-            currentEntry.SavedFocusTarget = currentFocus;
             bool currentPageHidden = false;
             bool currentPageClosed = false;
             CancellationToken cancellationToken = LifetimeCancellationToken;
@@ -182,7 +175,6 @@ namespace Mochi.Unity.Preview.GUI
                 RemoveStackEntryAt(StackCount - 1);
 
                 previousEntry.Panel.SetInteractionEnabledInternal(true);
-                previousEntry.Panel.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Panel.DefaultFocusTarget);
                 return true;
             }
             catch
@@ -196,7 +188,6 @@ namespace Mochi.Unity.Preview.GUI
                     RemoveStackEntryAt(StackCount - 1);
                     Destroy(currentEntry.Panel.gameObject);
                     previousEntry.Panel.SetInteractionEnabledInternal(true);
-                    previousEntry.Panel.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Panel.DefaultFocusTarget);
                 }
 
                 throw;
@@ -228,9 +219,12 @@ namespace Mochi.Unity.Preview.GUI
             {
                 currentEntry.Panel.ShowInternal();
             }
+            else
+            {
+                currentEntry.Panel.FocusInternal(currentFocus ?? currentEntry.Panel.DefaultFocusTarget);
+            }
 
             currentEntry.Panel.SetInteractionEnabledInternal(true);
-            currentEntry.Panel.FocusInternal(currentFocus ?? currentEntry.Panel.DefaultFocusTarget);
         }
 
         public async UniTask<bool> CloseAsync()

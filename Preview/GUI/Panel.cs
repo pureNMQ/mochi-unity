@@ -12,6 +12,7 @@ namespace Mochi.Unity.Preview.GUI
         public bool IsOpen { get; private set; }
         public bool IsVisible { get; private set; }
         public GameObject DefaultFocusTarget => defaultFocusTarget;
+        private GameObject savedFocusTarget;
 
         internal UniTask PrepareInternalAsync(CancellationToken cancellationToken)
         {
@@ -29,10 +30,12 @@ namespace Mochi.Unity.Preview.GUI
             gameObject.SetActive(true);
             OnShow();
             IsVisible = true;
+            RestoreFocusInternal();
         }
 
         internal void HideInternal()
         {
+            SaveFocusInternal();
             OnHide();
             gameObject.SetActive(false);
             IsVisible = false;
@@ -65,6 +68,18 @@ namespace Mochi.Unity.Preview.GUI
         internal void FocusDefaultInternal()
         {
             FocusInternal(defaultFocusTarget);
+        }
+
+        internal void SaveFocusInternal()
+        {
+            savedFocusTarget = EventSystem.current == null
+                ? null
+                : EventSystem.current.currentSelectedGameObject;
+        }
+
+        internal void RestoreFocusInternal()
+        {
+            FocusInternal(savedFocusTarget ?? defaultFocusTarget);
         }
 
         internal void FocusInternal(GameObject focusTarget)

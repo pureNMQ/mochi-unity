@@ -106,11 +106,6 @@ namespace Mochi.Unity.Preview.GUI
             IsBusy = true;
             //获取当前焦点对象，确保在模态面板关闭后可以恢复焦点
             StackEntry previousEntry = StackCount == 0 ? null : GetStackEntry(StackCount - 1);
-            GameObject previousFocus = EventSystem.current == null
-                ? previousEntry?.Panel.DefaultFocusTarget
-                : EventSystem.current.currentSelectedGameObject;
-
-
             GameObject prefab = null;
             TModal modal = null;
             bool committed = false;
@@ -121,7 +116,7 @@ namespace Mochi.Unity.Preview.GUI
                 //保存焦点对象，并禁用前一个模态面板的交互
                 if (previousEntry != null)
                 {
-                    previousEntry.SavedFocusTarget = previousFocus;
+                    previousEntry.Panel.SaveFocusInternal();
                     previousEntry.Panel.SetInteractionEnabledInternal(false);
                 }
 
@@ -183,8 +178,7 @@ namespace Mochi.Unity.Preview.GUI
                 if (!committed && previousEntry != null)
                 {
                     previousEntry.Panel.SetInteractionEnabledInternal(true);
-                    previousEntry.Panel.FocusInternal(
-                        previousEntry.SavedFocusTarget ?? previousEntry.Panel.DefaultFocusTarget);
+                    previousEntry.Panel.RestoreFocusInternal();
                 }
 
                 IsBusy = false;
@@ -373,7 +367,7 @@ namespace Mochi.Unity.Preview.GUI
                 SetBackdropRaycasts(true);
                 StackEntry nextTop = GetStackEntry(StackCount - 1);
                 nextTop.Panel.SetInteractionEnabledInternal(true);
-                nextTop.Panel.FocusInternal(nextTop.SavedFocusTarget ?? nextTop.Panel.DefaultFocusTarget);
+                nextTop.Panel.RestoreFocusInternal();
             }
 
             IsBusy = false;
