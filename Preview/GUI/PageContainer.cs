@@ -45,7 +45,7 @@ namespace Mochi.Unity.Preview.GUI
 
             IsBusy = true;
             StackEntry previousEntry = StackCount > 0 ? GetStackEntry(StackCount - 1) : null;
-            Panel previousPage = previousEntry?.Page;
+            Panel previousPage = previousEntry?.Panel;
             bool previousWasVisible = previousPage != null && previousPage.IsVisible;
             GameObject prefab = null;
             TPage page = null;
@@ -167,8 +167,8 @@ namespace Mochi.Unity.Preview.GUI
             StackEntry currentEntry = GetStackEntry(StackCount - 1);
             StackEntry previousEntry = GetStackEntry(StackCount - 2);
             GameObject currentFocus = EventSystem.current == null
-                ? currentEntry.Page.DefaultFocusTarget
-                : EventSystem.current.currentSelectedGameObject ?? currentEntry.Page.DefaultFocusTarget;
+                ? currentEntry.Panel.DefaultFocusTarget
+                : EventSystem.current.currentSelectedGameObject ?? currentEntry.Panel.DefaultFocusTarget;
             currentEntry.SavedFocusTarget = currentFocus;
             bool currentPageHidden = false;
             bool currentPageClosed = false;
@@ -176,23 +176,23 @@ namespace Mochi.Unity.Preview.GUI
 
             try
             {
-                currentEntry.Page.SetInteractionEnabledInternal(false);
-                previousEntry.Page.ShowInternal();
-                previousEntry.Page.SetInteractionEnabledInternal(false);
+                currentEntry.Panel.SetInteractionEnabledInternal(false);
+                previousEntry.Panel.ShowInternal();
+                previousEntry.Panel.SetInteractionEnabledInternal(false);
 
-                await RunExitTransitionAsync(currentEntry.Page, cancellationToken);
+                await RunExitTransitionAsync(currentEntry.Panel, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                currentEntry.Page.HideInternal();
+                currentEntry.Panel.HideInternal();
                 currentPageHidden = true;
-                currentEntry.Page.CloseInternal();
+                currentEntry.Panel.CloseInternal();
                 currentPageClosed = true;
 
                 Loader.Release(currentEntry.Prefab);
-                Destroy(currentEntry.Page.gameObject);
+                Destroy(currentEntry.Panel.gameObject);
                 RemoveStackEntryAt(StackCount - 1);
 
-                previousEntry.Page.SetInteractionEnabledInternal(true);
-                previousEntry.Page.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Page.DefaultFocusTarget);
+                previousEntry.Panel.SetInteractionEnabledInternal(true);
+                previousEntry.Panel.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Panel.DefaultFocusTarget);
                 return true;
             }
             catch
@@ -204,9 +204,9 @@ namespace Mochi.Unity.Preview.GUI
                 else
                 {
                     RemoveStackEntryAt(StackCount - 1);
-                    TryCleanup(() => Destroy(currentEntry.Page.gameObject));
-                    previousEntry.Page.SetInteractionEnabledInternal(true);
-                    previousEntry.Page.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Page.DefaultFocusTarget);
+                    TryCleanup(() => Destroy(currentEntry.Panel.gameObject));
+                    previousEntry.Panel.SetInteractionEnabledInternal(true);
+                    previousEntry.Panel.FocusInternal(previousEntry.SavedFocusTarget ?? previousEntry.Panel.DefaultFocusTarget);
                 }
 
                 throw;
@@ -223,24 +223,24 @@ namespace Mochi.Unity.Preview.GUI
             GameObject currentFocus,
             bool currentPageHidden)
         {
-            if (previousEntry.Page.IsVisible)
+            if (previousEntry.Panel.IsVisible)
             {
-                TryCleanup(previousEntry.Page.HideInternal);
+                TryCleanup(previousEntry.Panel.HideInternal);
             }
             else
             {
-                previousEntry.Page.RestoreHiddenInternal();
+                previousEntry.Panel.RestoreHiddenInternal();
             }
 
-            previousEntry.Page.SetInteractionEnabledInternal(false);
+            previousEntry.Panel.SetInteractionEnabledInternal(false);
 
-            if (currentPageHidden || !currentEntry.Page.IsVisible)
+            if (currentPageHidden || !currentEntry.Panel.IsVisible)
             {
-                TryCleanup(currentEntry.Page.ShowInternal);
+                TryCleanup(currentEntry.Panel.ShowInternal);
             }
 
-            currentEntry.Page.SetInteractionEnabledInternal(true);
-            currentEntry.Page.FocusInternal(currentFocus ?? currentEntry.Page.DefaultFocusTarget);
+            currentEntry.Panel.SetInteractionEnabledInternal(true);
+            currentEntry.Panel.FocusInternal(currentFocus ?? currentEntry.Panel.DefaultFocusTarget);
         }
 
         public async UniTask<bool> CloseAsync()
@@ -253,22 +253,22 @@ namespace Mochi.Unity.Preview.GUI
             IsBusy = true;
             StackEntry topEntry = GetStackEntry(StackCount - 1);
             GameObject topFocus = EventSystem.current == null
-                ? topEntry.Page.DefaultFocusTarget
-                : EventSystem.current.currentSelectedGameObject ?? topEntry.Page.DefaultFocusTarget;
+                ? topEntry.Panel.DefaultFocusTarget
+                : EventSystem.current.currentSelectedGameObject ?? topEntry.Panel.DefaultFocusTarget;
             CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
             {
-                topEntry.Page.SetInteractionEnabledInternal(false);
+                topEntry.Panel.SetInteractionEnabledInternal(false);
                 try
                 {
-                    await RunExitTransitionAsync(topEntry.Page, cancellationToken);
+                    await RunExitTransitionAsync(topEntry.Panel, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch
                 {
-                    topEntry.Page.SetInteractionEnabledInternal(true);
-                    topEntry.Page.FocusInternal(topFocus);
+                    topEntry.Panel.SetInteractionEnabledInternal(true);
+                    topEntry.Panel.FocusInternal(topFocus);
                     throw;
                 }
 
@@ -276,19 +276,19 @@ namespace Mochi.Unity.Preview.GUI
                 for (int index = StackCount - 1; index >= 0; index--)
                 {
                     StackEntry entry = GetStackEntry(index);
-                    if (entry.Page != null)
+                    if (entry.Panel != null)
                     {
-                        if (entry.Page.IsVisible)
+                        if (entry.Panel.IsVisible)
                         {
-                            CaptureCleanupException(entry.Page.HideInternal, ref firstException);
+                            CaptureCleanupException(entry.Panel.HideInternal, ref firstException);
                         }
 
-                        if (entry.Page.IsOpen)
+                        if (entry.Panel.IsOpen)
                         {
-                            CaptureCleanupException(entry.Page.CloseInternal, ref firstException);
+                            CaptureCleanupException(entry.Panel.CloseInternal, ref firstException);
                         }
 
-                        CaptureCleanupException(() => Destroy(entry.Page.gameObject), ref firstException);
+                        CaptureCleanupException(() => Destroy(entry.Panel.gameObject), ref firstException);
                     }
 
                     if (entry.Prefab != null)
@@ -316,19 +316,19 @@ namespace Mochi.Unity.Preview.GUI
             for (int index = StackCount - 1; index >= 0; index--)
             {
                 StackEntry entry = GetStackEntry(index);
-                if (entry.Page != null)
+                if (entry.Panel != null)
                 {
-                    if (entry.Page.IsVisible)
+                    if (entry.Panel.IsVisible)
                     {
-                        TryCleanup(entry.Page.HideInternal);
+                        TryCleanup(entry.Panel.HideInternal);
                     }
 
-                    if (entry.Page.IsOpen)
+                    if (entry.Panel.IsOpen)
                     {
-                        TryCleanup(entry.Page.CloseInternal);
+                        TryCleanup(entry.Panel.CloseInternal);
                     }
 
-                    TryCleanup(() => Destroy(entry.Page.gameObject));
+                    TryCleanup(() => Destroy(entry.Panel.gameObject));
                 }
 
                 if (Loader != null && entry.Prefab != null)

@@ -70,7 +70,6 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             public Panel Panel { get; }
-            public Panel Page => Panel;
             public GameObject Prefab { get; }
             public GameObject SavedFocusTarget { get; set; }
         }

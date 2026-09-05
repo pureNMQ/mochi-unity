@@ -31,9 +31,10 @@ namespace Mochi.Unity.Preview.GUI.Tests
             Assert.That(typeof(StackContainer).IsAbstract, Is.True);
             Assert.That(typeof(PageContainer).IsSubclassOf(typeof(StackContainer)), Is.True);
             Assert.That(typeof(ModalContainer).IsSubclassOf(typeof(StackContainer)), Is.True);
-            Assert.That(
-                typeof(StackContainer).GetNestedType("StackEntry", BindingFlags.NonPublic),
-                Is.Not.Null);
+            Type stackEntryType = typeof(StackContainer).GetNestedType("StackEntry", BindingFlags.NonPublic);
+            Assert.That(stackEntryType, Is.Not.Null);
+            Assert.That(stackEntryType.GetProperty("Panel"), Is.Not.Null);
+            Assert.That(stackEntryType.GetProperty("Page"), Is.Null);
         }
 
         [Test]
