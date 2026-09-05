@@ -230,16 +230,59 @@ namespace Mochi.Unity.Preview.GUI
             return PopEntriesAsync(StackCount - count, false, null);
         }
 
-        public UniTask<bool> CloseAsync()
+        public bool Close()
         {
             if (IsDisposed || IsBusy || StackCount == 0)
             {
-                return UniTask.FromResult(false);
+                return false;
             }
 
-            return PopEntriesAsync(0, false, null);
-        }
+            IsBusy = true;
+            List<Action> notifications = new List<Action>(StackCount);
+            try
+            {
+                for (int index = StackCount - 1; index >= 0; index--)
+                {
+                    StackEntry entry = GetStackEntry(index);
+                    if (entry.Panel != null)
+                    {
+                        if (entry.Panel.IsVisible || entry.Panel.gameObject.activeSelf)
+                        {
+                            entry.Panel.HideInternal();
+                        }
 
+                        if (entry.Panel.IsOpen)
+                        {
+                            entry.Panel.CloseInternal();
+                        }
+
+                        notifications.Add(((ModalPanel)entry.Panel).CaptureResultNotification(false, null));
+                        ((ModalPanel)entry.Panel).Unbind();
+                        Destroy(entry.Panel.gameObject);
+                    }
+
+                    if (entry.Prefab != null)
+                    {
+                        Loader.Release(entry.Prefab);
+                    }
+                }
+
+                ClearStackEntries();
+                SetBackdropAlpha(0f);
+                SetBackdropRaycasts(false);
+            }
+            finally
+            {
+                IsBusy = false;
+            }
+
+            foreach (Action notification in notifications)
+            {
+                notification?.Invoke();
+            }
+
+            return true;
+        }
         internal UniTask<bool> CancelAsync(ModalPanel modal)
         {
             if (modal == null || !IsTop(modal) || IsDisposed || IsBusy)

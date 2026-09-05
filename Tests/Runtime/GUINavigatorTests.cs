@@ -44,7 +44,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     Assert.That(page, Is.Not.Null);
                     Assert.That(navigator.Pages, Is.SameAs(container));
                     Assert.That(navigator.Modals, Is.SameAs(modalContainer));
-                    Assert.That(await navigator.Pages.CloseAsync(), Is.True);
+                    Assert.That(navigator.Pages.Close(), Is.True);
                     Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 }
                 finally

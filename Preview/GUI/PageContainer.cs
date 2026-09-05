@@ -2,7 +2,6 @@ using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
-using UnityEngine.EventSystems;
 
 namespace Mochi.Unity.Preview.GUI
 {
@@ -175,7 +174,7 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        public async UniTask<bool> CloseAsync()
+        public bool Close()
         {
             if (IsDisposed || IsBusy || StackCount == 0)
             {
@@ -183,27 +182,8 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             IsBusy = true;
-            StackEntry topEntry = GetStackEntry(StackCount - 1);
-            GameObject topFocus = EventSystem.current == null
-                ? topEntry.Panel.DefaultFocusTarget
-                : EventSystem.current.currentSelectedGameObject ?? topEntry.Panel.DefaultFocusTarget;
-            CancellationToken cancellationToken = LifetimeCancellationToken;
-
             try
             {
-                topEntry.Panel.SetInteractionEnabledInternal(false);
-                try
-                {
-                    await RunExitTransitionAsync(topEntry.Panel, cancellationToken);
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-                catch
-                {
-                    topEntry.Panel.SetInteractionEnabledInternal(true);
-                    topEntry.Panel.FocusInternal(topFocus);
-                    throw;
-                }
-
                 for (int index = StackCount - 1; index >= 0; index--)
                 {
                     StackEntry entry = GetStackEntry(index);
@@ -236,7 +216,6 @@ namespace Mochi.Unity.Preview.GUI
                 IsBusy = false;
             }
         }
-
         protected override void CleanupStackOnDestroy()
         {
             for (int index = StackCount - 1; index >= 0; index--)

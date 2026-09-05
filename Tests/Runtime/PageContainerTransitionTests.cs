@@ -111,8 +111,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(transition.EnterCount, Is.EqualTo(1));
 
-                Assert.That(await container.CloseAsync(), Is.True);
-                Assert.That(transition.ExitCount, Is.EqualTo(1));
+                Assert.That(container.Close(), Is.True);
+                Assert.That(transition.ExitCount, Is.Zero);
             });
         }
 

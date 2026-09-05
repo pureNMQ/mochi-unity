@@ -46,7 +46,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator CloseAsync_ExitsTopAndReleasesWholeStackTopFirst()
+        public IEnumerator Close_ClosesWholeStackTopFirst()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -64,8 +64,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 List<string> secondEvents = second.Events;
                 List<string> thirdEvents = third.Events;
 
-                bool result = await container.CloseAsync();
-                await UniTask.NextFrame();
+                bool result = container.Close();
 
                 Assert.That(result, Is.True);
                 Assert.That(container.StackCount, Is.Zero);
@@ -73,16 +72,16 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
                 Assert.That(firstEvents, Does.Not.Contain("Exit"));
                 Assert.That(secondEvents, Does.Not.Contain("Exit"));
-                Assert.That(thirdEvents, Does.Contain("Exit"));
+                Assert.That(thirdEvents, Does.Not.Contain("Exit"));
                 Assert.That(firstEvents, Does.Contain("Close"));
                 Assert.That(secondEvents, Does.Contain("Close"));
                 Assert.That(thirdEvents, Does.Contain("Close"));
-                Assert.That(await container.CloseAsync(), Is.False);
+                Assert.That(container.Close(), Is.False);
             });
         }
 
         [UnityTest]
-        public IEnumerator CloseAsync_WhilePushIsBusyReturnsFalseWithoutChangingStack()
+        public IEnumerator Close_WhilePushIsBusyReturnsFalseWithoutChangingStack()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -94,7 +93,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 UniTask<ClosePage> push = container.PushAsync<ClosePage>("page");
                 await UniTask.Yield();
 
-                Assert.That(await container.CloseAsync(), Is.False);
+                Assert.That(container.Close(), Is.False);
                 loader.Complete();
                 ClosePage page = await push;
 
@@ -128,7 +127,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator CloseAsync_WhenCleanupThrowsContinuesReleasingRemainingPagesAndThrowsFirstException()
+        public IEnumerator Close_WhenCleanupThrowsContinuesReleasingRemainingPagesAndThrowsFirstException()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -146,7 +145,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Exception caught = null;
                 try
                 {
-                    await container.CloseAsync();
+                    container.Close();
                 }
                 catch (Exception exception)
                 {

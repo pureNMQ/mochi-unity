@@ -47,7 +47,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     "callback:middle:False:",
                     "event:middle:False:"
                 }));
-                Assert.That(await container.CloseAsync(), Is.True);
+                Assert.That(container.Close(), Is.True);
                 Assert.That(container.Count, Is.Zero);
                 Assert.That(notifications, Is.EqualTo(new[]
                 {
@@ -116,7 +116,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(next, Is.Not.Null);
                 Assert.That(container.Current, Is.SameAs(next));
                 Assert.That(container.Count, Is.EqualTo(1));
-                Assert.That(await container.CloseAsync(), Is.True);
+                Assert.That(container.Close(), Is.True);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
             });
         }
