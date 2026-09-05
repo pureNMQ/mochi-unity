@@ -8,7 +8,6 @@ namespace Mochi.Unity.Preview.GUI
 {
     public class PageContainer : StackContainer
     {
-        public int Count => StackCount;
         public IPanel Current => StackCount > 0 ? GetStackEntry(StackCount - 1).Panel : null;
         public bool CanGoBack => !IsBusy && StackCount > 1;
 

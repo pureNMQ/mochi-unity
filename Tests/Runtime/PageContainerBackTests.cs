@@ -57,7 +57,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(backResult, Is.True);
                 Assert.That(container.Current, Is.SameAs(firstPage));
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
                 Assert.That(firstPage.IsVisible, Is.True);
                 Assert.That(firstPage.gameObject.activeSelf, Is.True);
                 Assert.That(firstPage.Events, Does.Contain("OnShow"));
@@ -72,7 +72,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(await container.BackAsync(), Is.False);
                 Assert.That(container.Current, Is.SameAs(firstPage));
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
                 Assert.That(container.CanGoBack, Is.False);
             });
         }

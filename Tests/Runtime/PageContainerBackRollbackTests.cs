@@ -91,7 +91,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
             Assert.That(caught.Message, Is.EqualTo(failureStage.ToString()));
             Assert.That(container.IsBusy, Is.False);
             Assert.That(container.Current, Is.SameAs(secondPage));
-            Assert.That(container.Count, Is.EqualTo(2));
+            Assert.That(container.StackCount, Is.EqualTo(2));
             Assert.That(container.CanGoBack, Is.True);
             Assert.That(firstPage.IsVisible, Is.False);
             Assert.That(firstPage.gameObject.activeSelf, Is.False);

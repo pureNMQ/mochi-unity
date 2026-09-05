@@ -10,7 +10,7 @@ namespace Mochi.Unity.Preview.GUI
         private readonly CancellationTokenSource lifetimeCancellation =
             new CancellationTokenSource();
 
-        protected int StackCount => stackEntries.Count;
+        public int StackCount => stackEntries.Count;
         protected CancellationToken LifetimeCancellationToken => lifetimeCancellation.Token;
 
         protected StackEntry GetStackEntry(int index)

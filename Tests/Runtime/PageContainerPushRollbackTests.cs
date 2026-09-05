@@ -80,7 +80,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
             Assert.That(caught.Message, Is.EqualTo(failureStage.ToString()));
             Assert.That(container.IsBusy, Is.False);
             Assert.That(container.Current, Is.SameAs(firstPage));
-            Assert.That(container.Count, Is.EqualTo(1));
+            Assert.That(container.StackCount, Is.EqualTo(1));
             Assert.That(firstPage.IsVisible, Is.True);
             Assert.That(firstPage.gameObject.activeSelf, Is.True);
             Assert.That(firstPage.CanvasGroup.interactable, Is.True);

@@ -59,7 +59,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(secondPage, Is.Not.Null);
                 Assert.That(container.Current, Is.SameAs(secondPage));
-                Assert.That(container.Count, Is.EqualTo(2));
+            Assert.That(container.StackCount, Is.EqualTo(2));
                 Assert.That(firstPage, Is.Not.Null);
                 Assert.That(firstPage.State, Is.EqualTo(1));
                 Assert.That(firstPage.IsVisible, Is.False);

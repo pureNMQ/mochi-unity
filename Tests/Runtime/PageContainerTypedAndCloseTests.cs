@@ -68,7 +68,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 await UniTask.NextFrame();
 
                 Assert.That(result, Is.True);
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(container.Current, Is.Null);
                 Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
                 Assert.That(firstEvents, Does.Not.Contain("Exit"));
@@ -99,7 +99,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 ClosePage page = await push;
 
                 Assert.That(page, Is.Not.Null);
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
             });
         }
 
@@ -119,11 +119,11 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 await UniTask.Yield();
 
                 Assert.That(await container.BackAsync(), Is.False);
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
 
                 loader.Complete();
                 Assert.That(await push, Is.Not.Null);
-                Assert.That(container.Count, Is.EqualTo(2));
+                Assert.That(container.StackCount, Is.EqualTo(2));
             });
         }
 
@@ -155,7 +155,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(caught, Is.TypeOf<CleanupFailureException>());
                 Assert.That(caught.Message, Is.EqualTo("SecondPrefab(Clone)"));
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
                 Assert.That(first.Events, Does.Contain("Close"));
                 Assert.That(second.Events, Does.Contain("Close"));

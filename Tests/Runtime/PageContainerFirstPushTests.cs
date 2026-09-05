@@ -45,7 +45,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(page.transform.parent, Is.SameAs(container.transform));
                 Assert.That(page.Events, Is.EqualTo(new[] { "OnPrepare", "OnOpen", "OnShow" }));
                 Assert.That(container.Current, Is.SameAs(page));
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
             });
         }
 
@@ -63,7 +63,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(page, Is.Null);
                 Assert.That(container.Current, Is.Null);
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(loader.ReleaseCount, Is.Zero);
             });
         }
@@ -85,7 +85,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(page, Is.Null);
                 Assert.That(container.Current, Is.Null);
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
 
                 await UniTask.NextFrame();
