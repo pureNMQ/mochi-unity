@@ -101,10 +101,6 @@ namespace Mochi.Unity.Preview.GUI
             catch
             {
                 await RollbackPushAsync(prefab, page);
-                throw;
-            }
-            finally
-            {
                 if (previousPage != null)
                 {
                     if (previousWasVisible && !previousPage.IsVisible)
@@ -119,6 +115,10 @@ namespace Mochi.Unity.Preview.GUI
                     }
                 }
 
+                throw;
+            }
+            finally
+            {
                 IsBusy = false;
             }
         }
