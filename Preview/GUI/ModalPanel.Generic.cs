@@ -18,9 +18,10 @@ namespace Mochi.Unity.Preview.GUI
                 : Container.CompleteAsync(this, result);
         }
 
-        internal override void BindResultCallback(Delegate callback)
+        //强类型绑定结果回调：调用方已知 TResult，无需先擦除为 Delegate 再 as 转回，类型不匹配由编译期发现
+        internal void BindResultCallback(ModalResultCallback<TResult> callback)
         {
-            pushCallback = callback as ModalResultCallback<TResult>;
+            pushCallback = callback;
         }
 
         internal override Action CaptureResultNotification(bool hasResult, object result)

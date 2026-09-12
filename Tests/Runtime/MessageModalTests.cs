@@ -84,7 +84,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 GetField<Button>(modal, "acknowledgeButton").onClick.Invoke();
                 GetField<Button>(modal, "acknowledgeButton").onClick.Invoke();
-                await UniTask.WaitUntil(() => container.Count == 0)
+                await UniTask.WaitUntil(() => container.StackCount == 0)
                     .Timeout(System.TimeSpan.FromSeconds(2));
 
                 Assert.That(hasResult, Is.True);
@@ -115,7 +115,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                         result = value;
                     });
 
-                Assert.That(await container.PopAsync(), Is.True);
+                Assert.That(await container.BackAsync(), Is.True);
                 Assert.That(hasResult, Is.False);
                 Assert.That(result, Is.EqualTo(default(MessageModalResult)));
             });

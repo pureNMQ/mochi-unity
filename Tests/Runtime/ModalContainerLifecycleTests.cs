@@ -27,7 +27,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator PopCountAndClose_NotifyRemovedModalsTopFirstAndKeepResultDefault()
+        public IEnumerator Back_NotifyOnlyCurrentThenCloseNotifiesRestTopFirst()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -37,18 +37,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 NoDataModal middle = await Push(container, "middle", notifications, "middle");
                 NoDataModal top = await Push(container, "top", notifications, "top");
 
-                Assert.That(await container.PopAsync(2), Is.True);
-                Assert.That(container.Current, Is.SameAs(root));
-                Assert.That(container.Count, Is.EqualTo(1));
+                //R5：Back 一次只移除当前栈顶，只通知当前条目
+                Assert.That(await container.BackAsync(), Is.True);
+                Assert.That(container.Current, Is.SameAs(middle));
+                Assert.That(container.StackCount, Is.EqualTo(2));
+                Assert.That(root.IsVisible, Is.True);
                 Assert.That(notifications, Is.EqualTo(new[]
                 {
                     "callback:top:False:",
-                    "event:top:False:",
-                    "callback:middle:False:",
-                    "event:middle:False:"
+                    "event:top:False:"
                 }));
                 typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(notifications, Is.EqualTo(new[]
                 {
                     "callback:top:False:",
@@ -87,7 +87,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(firstCallbackCount, Is.Zero);
                 Assert.That(secondCallbackCount, Is.EqualTo(1));
                 Assert.That(await first.CancelResultAsync(), Is.True);
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(firstCallbackCount, Is.EqualTo(1));
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
             });
@@ -115,7 +115,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(busyAtCallback, Is.False);
                 Assert.That(next, Is.Not.Null);
                 Assert.That(container.Current, Is.SameAs(next));
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
                 typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
             });
@@ -143,10 +143,10 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     .GetComponent<IPointerClickHandler>();
                 backdrop.OnPointerClick(new PointerEventData(EventSystem.current));
 
-                await UniTask.WaitUntil(() => container.Count == 0)
+                await UniTask.WaitUntil(() => container.StackCount == 0)
                     .Timeout(TimeSpan.FromSeconds(2));
 
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(hasResult, Is.False);
                 Assert.That(result, Is.Null);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
@@ -154,7 +154,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Pop_WhenExitThrows_RestoresStackAndInteraction()
+        public IEnumerator Back_WhenExitThrows_StillCleansUpWithoutRollback()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -164,36 +164,42 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     out GameObject secondPrefab);
                 firstPrefab.GetComponent<ExitFailureModal>().ShouldFailExit = false;
                 secondPrefab.GetComponent<ExitFailureModal>().ShouldFailExit = true;
+                List<string> notifications = new List<string>();
                 ExitFailureModal first = await containerObject.PushAsync<ExitFailureModal, string>(
                     "first",
-                    new ModalResultCallback<string>((hasResult, result) => { }));
+                    new ModalResultCallback<string>((hasResult, result) =>
+                        notifications.Add($"first:{hasResult}:{result}")));
                 ExitFailureModal second = await containerObject.PushAsync<ExitFailureModal, string>(
                     "second",
-                    new ModalResultCallback<string>((hasResult, result) => { }));
+                    new ModalResultCallback<string>((hasResult, result) =>
+                        notifications.Add($"second:{hasResult}:{result}")));
 
                 Exception caught = null;
                 try
                 {
-                    await containerObject.PopAsync();
+                    await containerObject.BackAsync();
                 }
                 catch (Exception exception)
                 {
                     caught = exception;
                 }
 
+                //R5：Back 不回滚——退出动画抛错仍继续清理（条目移除、实例销毁、资源释放、
+                //前一个 Modal 恢复交互/显示），异常向外传播
                 Assert.That(caught, Is.TypeOf<ExitFailureException>());
                 Assert.That(containerObject.IsBusy, Is.False);
-                Assert.That(containerObject.Count, Is.EqualTo(2));
-                Assert.That(containerObject.Current, Is.SameAs(second));
+                Assert.That(containerObject.StackCount, Is.EqualTo(1));
+                Assert.That(containerObject.Current, Is.SameAs(first));
                 Assert.That(first.gameObject.activeSelf, Is.True);
-                Assert.That(second.gameObject.activeSelf, Is.True);
-                Assert.That(first.CanvasGroup.interactable, Is.False);
-                Assert.That(second.CanvasGroup.interactable, Is.True);
-                Assert.That(loader.ReleaseCount, Is.Zero);
+                Assert.That(first.CanvasGroup.interactable, Is.True);
+                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+                //清理完成后按条目交付结果，Back 语义为 hasResult=false
+                Assert.That(notifications, Is.EqualTo(new[] { "second:False:" }));
 
-                second.ShouldFailExit = false;
-                Assert.That(await containerObject.PopAsync(), Is.True);
-                Assert.That(containerObject.Count, Is.EqualTo(1));
+                //容器仍可用：继续 Back 移除剩余栈顶
+                Assert.That(await containerObject.BackAsync(), Is.True);
+                Assert.That(containerObject.StackCount, Is.EqualTo(0));
+                Assert.That(loader.ReleaseCount, Is.EqualTo(2));
             });
         }
 
@@ -211,18 +217,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 UniTask<NoDataModal> firstPush = container.PushAsync<NoDataModal, string>("modal");
                 await UniTask.Yield();
                 Assert.That(container.IsBusy, Is.True);
-                Assert.That(await container.PopAsync(), Is.False);
+                Assert.That(await container.BackAsync(), Is.False);
                 Assert.That(await container.PushAsync<NoDataModal, string>("modal"), Is.Null);
 
                 loader.Complete();
                 Assert.That(await firstPush, Is.Not.Null);
                 Assert.That(container.IsBusy, Is.False);
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
             });
         }
 
         [UnityTest]
-        public IEnumerator CleanupFailure_CommitsRemovalNotifiesAndThrowsFirstException()
+        public IEnumerator CleanupFailure_LifecycleThrowStopsCleanupAndPropagates()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -240,18 +246,20 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Exception caught = null;
                 try
                 {
-                    await container.PopAsync();
+                    await container.BackAsync();
                 }
                 catch (Exception exception)
                 {
                     caught = exception;
                 }
 
+                //F5 可信原则：OnHide 抛错违反 Panel 生命周期契约，容器不防御、不收集错误；
+                //单层 try/finally 下清理在抛错步骤停止：条目未移除、资源未释放、Busy 未复位、通知未交付
                 Assert.That(caught, Is.TypeOf<CleanupFailureException>());
-                Assert.That(container.IsBusy, Is.False);
-                Assert.That(container.Count, Is.Zero);
-                Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
-                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+                Assert.That(container.IsBusy, Is.True);
+                Assert.That(container.StackCount, Is.EqualTo(1));
+                Assert.That(notifications, Is.Empty);
+                Assert.That(loader.ReleaseCount, Is.EqualTo(0));
             });
         }
 
@@ -450,8 +458,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
         private sealed class FailOnHideModal : ModalPanel<string>
         {
+            private bool hasThrown;
+
             protected override void OnHide()
             {
+                //只抛一次：TearDown 销毁容器时会再次触发清理路径的 OnHide，
+                //若再次抛错会以未处理日志形式污染测试结果
+                if (hasThrown)
+                {
+                    return;
+                }
+
+                hasThrown = true;
                 throw new CleanupFailureException();
             }
         }

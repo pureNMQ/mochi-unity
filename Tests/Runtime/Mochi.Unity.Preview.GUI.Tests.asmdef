@@ -2,8 +2,11 @@
     "name": "Mochi.Unity.Preview.GUI.Tests",
     "rootNamespace": "Mochi.Unity.Preview.GUI.Tests",
     "references": [
+        "Mochi",
         "Mochi.Unity",
         "UniTask",
+        "Unity.Addressables",
+        "Unity.ResourceManager",
         "Unity.TextMeshPro",
         "UnityEngine.UI"
     ],

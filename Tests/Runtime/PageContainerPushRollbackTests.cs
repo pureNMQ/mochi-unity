@@ -99,7 +99,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
             switch (failureStage)
             {
                 case FailureStage.OnOpen:
-                    return new[] { "OnPrepare", "OnOpen" };
+                    //新契约：失败收尾统一执行 HideInternal→CloseInternal（调用方不再按 IsOpen 分散判断），
+                    //OnOpen 未完成也会补做一次 OnClose 清理
+                    return new[] { "OnPrepare", "OnOpen", "OnClose" };
                 case FailureStage.OnShow:
                     return new[] { "OnPrepare", "OnOpen", "OnShow", "OnClose" };
                 case FailureStage.Enter:

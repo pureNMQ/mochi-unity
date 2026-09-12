@@ -11,6 +11,8 @@ using UnityEngine.TestTools;
 
 namespace Mochi.Unity.Preview.GUI.Tests
 {
+    //R4/F4 新契约用例：Back 确定关闭、不回滚——条目先移出栈（所有权转移）、
+    //同步清理（实例销毁/资源释放）、异常仍传播、前页恢复交互/显示
     public class PageContainerBackRollbackTests
     {
         private readonly List<GameObject> objectsToDestroy = new List<GameObject>();
@@ -33,30 +35,30 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Back_WhenPreviousOnShowThrows_RestoresTopPageAndPropagatesOriginalException()
+        public IEnumerator Back_WhenPreviousOnShowThrows_DestroysFailedPageWithoutRollback()
         {
-            return UniTask.ToCoroutine(() => RunBackRollbackTest(FailureStage.AOnShow));
+            return UniTask.ToCoroutine(() => RunBackFailureTest(FailureStage.AOnShow));
         }
 
         [UnityTest]
-        public IEnumerator Back_WhenExitThrows_RestoresTopPageAndPropagatesOriginalException()
+        public IEnumerator Back_WhenExitThrows_DestroysFailedPageWithoutRollback()
         {
-            return UniTask.ToCoroutine(() => RunBackRollbackTest(FailureStage.BExit));
+            return UniTask.ToCoroutine(() => RunBackFailureTest(FailureStage.BExit));
         }
 
         [UnityTest]
-        public IEnumerator Back_WhenOnHideThrows_RestoresTopPageAndPropagatesOriginalException()
+        public IEnumerator Back_WhenOnHideThrows_DestroysFailedPageWithoutRollback()
         {
-            return UniTask.ToCoroutine(() => RunBackRollbackTest(FailureStage.BOnHide));
+            return UniTask.ToCoroutine(() => RunBackFailureTest(FailureStage.BOnHide));
         }
 
         [UnityTest]
-        public IEnumerator Back_WhenOnCloseThrows_RestoresTopPageAndPropagatesOriginalException()
+        public IEnumerator Back_WhenOnCloseThrows_DestroysFailedPageWithoutRollback()
         {
-            return UniTask.ToCoroutine(() => RunBackRollbackTest(FailureStage.BOnClose));
+            return UniTask.ToCoroutine(() => RunBackFailureTest(FailureStage.BOnClose));
         }
 
-        private async UniTask RunBackRollbackTest(FailureStage failureStage)
+        private async UniTask RunBackFailureTest(FailureStage failureStage)
         {
             GameObject eventSystemObject = Track(new GameObject("EventSystem"));
             EventSystem eventSystem = eventSystemObject.AddComponent<EventSystem>();
@@ -71,9 +73,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
             BackRollbackPage firstPage = await container.PushAsync<BackRollbackPage>("first-page");
             BackRollbackPage secondPage = await container.PushAsync<BackRollbackPage>("second-page");
-            GameObject originalFocus = secondPage.transform.Find("AlternateFocus").gameObject;
-            eventSystem.SetSelectedGameObject(originalFocus);
-            List<string> secondPageEvents = secondPage.Events;
+            GameObject secondFocus = secondPage.transform.Find("AlternateFocus").gameObject;
+            eventSystem.SetSelectedGameObject(secondFocus);
 
             Exception caught = null;
             try
@@ -85,26 +86,40 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 caught = exception;
             }
 
+            //Destroy 延迟到帧末，等待一帧后断言失败页已被销毁
             await UniTask.Yield();
 
+            //新契约：Back 不回滚——异常类型与消息保留并继续向外传播
             Assert.That(caught, Is.TypeOf<BackFailureException>());
             Assert.That(caught.Message, Is.EqualTo(failureStage.ToString()));
+            //Busy 复位；失败页条目已移出栈，仅剩前页
             Assert.That(container.IsBusy, Is.False);
-            Assert.That(container.Current, Is.SameAs(secondPage));
-            Assert.That(container.StackCount, Is.EqualTo(2));
-            Assert.That(container.CanGoBack, Is.True);
-            Assert.That(firstPage.IsVisible, Is.False);
-            Assert.That(firstPage.gameObject.activeSelf, Is.False);
-            Assert.That(firstPage.CanvasGroup.interactable, Is.False);
-            Assert.That(firstPage.CanvasGroup.blocksRaycasts, Is.False);
-            Assert.That(secondPage.IsOpen, Is.True);
-            Assert.That(secondPage.IsVisible, Is.True);
-            Assert.That(secondPage.gameObject.activeSelf, Is.True);
-            Assert.That(secondPage.CanvasGroup.interactable, Is.True);
-            Assert.That(secondPage.CanvasGroup.blocksRaycasts, Is.True);
-            Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(originalFocus));
-            Assert.That(loader.ReleaseCount, Is.Zero);
-            Assert.That(secondPageEvents, Is.EqualTo(ExpectedSecondPageEvents(failureStage)));
+            Assert.That(container.StackCount, Is.EqualTo(1));
+            Assert.That(container.Current, Is.SameAs(firstPage));
+            Assert.That(container.CanGoBack, Is.False);
+            //失败页被销毁且 Prefab 引用恰好释放一次（不回滚、不重复 Release）
+            Assert.That(secondPage == null, Is.True);
+            Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+            //前页恢复交互
+            Assert.That(firstPage.CanvasGroup.interactable, Is.True);
+            Assert.That(firstPage.CanvasGroup.blocksRaycasts, Is.True);
+
+            if (failureStage == FailureStage.AOnShow)
+            {
+                //前页 OnShow 本身抛错属于生命周期契约破坏，容器不防御（F5）：
+                //激活已完成但 IsVisible 未置位，焦点恢复未执行；
+                //原选中目标随失败页销毁而失效（Unity 判空经 == 运算符重载）
+                Assert.That(firstPage.gameObject.activeSelf, Is.True);
+                Assert.That(firstPage.IsVisible, Is.False);
+                Assert.That(eventSystem.currentSelectedGameObject == null, Is.True);
+            }
+            else
+            {
+                //前页恢复显示，焦点显式恢复到前页自身焦点记忆
+                Assert.That(firstPage.IsVisible, Is.True);
+                Assert.That(firstPage.gameObject.activeSelf, Is.True);
+                Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(GetDefaultFocusTarget(firstPage)));
+            }
         }
 
         private GameObject CreatePagePrefab(string name, FailureStage failureStage)
@@ -124,28 +139,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
             return prefab;
         }
 
-        private static string[] ExpectedSecondPageEvents(FailureStage failureStage)
-        {
-            switch (failureStage)
-            {
-                case FailureStage.AOnShow:
-                    return new[] { "OnPrepare", "OnOpen", "OnShow", "Enter" };
-                case FailureStage.BExit:
-                    return new[] { "OnPrepare", "OnOpen", "OnShow", "Enter", "Exit" };
-                case FailureStage.BOnHide:
-                    return new[] { "OnPrepare", "OnOpen", "OnShow", "Enter", "Exit", "OnHide" };
-                case FailureStage.BOnClose:
-                    return new[] { "OnPrepare", "OnOpen", "OnShow", "Enter", "Exit", "OnHide", "OnClose", "OnShow" };
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(failureStage), failureStage, null);
-            }
-        }
-
         private static void SetDefaultFocusTarget(BackRollbackPage page, GameObject target)
         {
             FieldInfo field = typeof(Panel).GetField("defaultFocusTarget", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.That(field, Is.Not.Null);
             field.SetValue(page, target);
+        }
+
+        private static GameObject GetDefaultFocusTarget(Panel page)
+        {
+            FieldInfo field = typeof(Panel).GetField("defaultFocusTarget", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null);
+            return (GameObject)field.GetValue(page);
         }
 
         private GameObject Track(GameObject target)
@@ -196,7 +201,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     return UniTask.FromResult(secondPrefab);
                 }
 
-                throw new ArgumentException($"Unexpected test key: {key}");
+                throw new ArgumentException("Unexpected test key: " + key);
             }
 
             public void Release(GameObject loadedPrefab)

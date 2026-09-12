@@ -11,7 +11,7 @@ namespace Mochi.Unity.Preview.GUI
             new CancellationTokenSource();
 
         public int StackCount => stackEntries.Count;
-        protected CancellationToken LifetimeCancellationToken => lifetimeCancellation.Token;
+        protected override CancellationToken LifetimeCancellationToken => lifetimeCancellation.Token;
 
         protected StackEntry GetStackEntry(int index)
         {
@@ -28,11 +28,6 @@ namespace Mochi.Unity.Preview.GUI
             stackEntries.RemoveAt(index);
         }
 
-        protected void RemoveStackEntries(int index, int count)
-        {
-            stackEntries.RemoveRange(index, count);
-        }
-
         protected void ClearStackEntries()
         {
             stackEntries.Clear();
@@ -42,9 +37,18 @@ namespace Mochi.Unity.Preview.GUI
         {
             if (IsDisposed)
             {
+                //已被 Busy 关闭接管标记为不可用的容器：条目已被清栈、在途操作已被取消，
+                //这里仅补齐生命周期资源释放，不再重复清栈；正常 Close 不标记 IsDisposed，
+                //关闭后再销毁仍走完整时序，但栈已空、清栈为空操作
+                lifetimeCancellation.Dispose();
+                base.OnDestroy();
                 return;
             }
 
+            //F4 销毁时序：入口最先标记不可用（复用 IsDisposed，不新增销毁状态字段），
+            //使公开导航入口立即拒绝新操作、在途 Back/Push 的异步收尾据此跳过条目清理；
+            //随后取消进行中的异步操作，再交由具体容器清栈并交付通知
+            IsDisposed = true;
             IsBusy = false;
             lifetimeCancellation.Cancel();
             try
@@ -59,7 +63,31 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
+        //F4 收尾（2026-09-12）：正常 Close 触发本容器 OnClose 且本容器 Busy 时立即接管，不排队/挂起：
+        //先标记不可用并取消在途操作（与销毁共用所有权规则），在途 Back/Push 的异步收尾
+        //据此跳过条目清理与索引移除；条目清栈、资源释放与通知交付由调用方 OnClose 完成
+        protected void BeginBusyTakeOver()
+        {
+            IsDisposed = true;
+            lifetimeCancellation.Cancel();
+        }
+
         protected abstract void CleanupStackOnDestroy();
+
+        //C1：向栈内全部条目传播 Hide 请求（由 PanelContainer.Hide 调用）。
+        //调用方不判断 IsVisible，由 Panel.HideInternal 幂等决定是否实际执行 OnHide；
+        //沿用 R2 风格 Unity 判空：条目实例可能已被外部销毁，仅存活实例执行生命周期调用
+        protected override void PropagateHideToStack()
+        {
+            for (int index = 0; index < StackCount; index++)
+            {
+                Panel panel = GetStackEntry(index).Panel;
+                if (panel != null)
+                {
+                    panel.HideInternal();
+                }
+            }
+        }
 
         protected sealed class StackEntry
         {

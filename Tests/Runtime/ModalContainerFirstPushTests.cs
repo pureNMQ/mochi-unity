@@ -52,16 +52,16 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(modal, Is.Not.Null);
                 Assert.That(container.Current, Is.SameAs(modal));
-                Assert.That(container.Count, Is.EqualTo(1));
+                Assert.That(container.StackCount, Is.EqualTo(1));
                 Assert.That(callbackCalled, Is.False);
 
-                bool popped = await container.PopAsync();
+                bool popped = await container.BackAsync();
 
                 Assert.That(popped, Is.True);
                 Assert.That(callbackCalled, Is.True);
                 Assert.That(hasResult, Is.False);
                 Assert.That(callbackResult, Is.Null);
-                Assert.That(container.Count, Is.Zero);
+                Assert.That(container.StackCount, Is.Zero);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
             });
         }
