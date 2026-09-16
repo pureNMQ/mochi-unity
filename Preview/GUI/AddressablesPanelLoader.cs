@@ -14,9 +14,7 @@ namespace Mochi.Unity.Preview.GUI
 {
     public sealed class AddressablesPanelLoader : IPanelLoader, IDisposable
     {
-        // 分类 Logger：分类名沿用模块路径（Preview.GUI）加类型角色（PanelLoader），便于按来源过滤和定位问题。
-        // Writer 由项目日志初始化统一注册，Loader 只产生日志，不自行注册输出；
-        // using 别名沿用项目惯例（如 BattleTestStartup），避免与 UnityEngine.ILogger 产生二义性。
+        // 分类 Logger：Writer 由项目日志初始化统一注册，Loader 只产生日志；using 别名避免与 UnityEngine.ILogger 二义性
         private static readonly ILogger logger = LogManager.GetLogger("Preview.GUI.PanelLoader");
 
         private sealed class Entry

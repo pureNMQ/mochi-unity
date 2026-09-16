@@ -64,9 +64,10 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(secondPage == null, Is.True);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 Assert.That(loader.ReleasedPrefab, Is.SameAs(secondPrefab));
+                //新契约：Close 同步提交（OnHide、OnClose 即时），Exit 为退场视觉在其后自行追赶
                 Assert.That(secondPageLifecycle, Is.EqualTo(new[]
                 {
-                    "OnPrepare", "OnOpen", "OnShow", "Enter", "Exit", "OnHide", "OnClose"
+                    "OnPrepare", "OnOpen", "OnShow", "Enter", "OnHide", "OnClose", "Exit"
                 }));
                 Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(originalFocus));
 

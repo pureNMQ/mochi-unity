@@ -63,19 +63,23 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 List<string> secondEvents = second.Events;
                 List<string> thirdEvents = third.Events;
 
-                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
+                container.Close();
 
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(container.Current, Is.Null);
-                Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
-                Assert.That(firstEvents, Does.Not.Contain("Exit"));
-                Assert.That(secondEvents, Does.Not.Contain("Exit"));
-                Assert.That(thirdEvents, Does.Not.Contain("Exit"));
+                //等一帧确保延迟销毁生效；销毁顺序不保证，按等价集合断言
+                await UniTask.Yield();
+                Assert.That(loader.ReleasedPrefabs, Is.EquivalentTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
+                //新契约：Close 内部触发退场过渡（fire-and-forget，视觉自行追赶）
+                Assert.That(firstEvents, Does.Contain("Exit"));
+                Assert.That(secondEvents, Does.Contain("Exit"));
+                Assert.That(thirdEvents, Does.Contain("Exit"));
                 Assert.That(firstEvents, Does.Contain("Close"));
                 Assert.That(secondEvents, Does.Contain("Close"));
                 Assert.That(thirdEvents, Does.Contain("Close"));
-                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
+                container.Close();
                 Assert.That(container.StackCount, Is.Zero);
+                await UniTask.Yield();
                 Assert.That(loader.ReleasedPrefabs.Count, Is.EqualTo(3));
             });
         }

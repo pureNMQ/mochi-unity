@@ -64,7 +64,7 @@ namespace Mochi.Unity.Preview.GUI
         /// <typeparam name="TData">参数类型</typeparam>
         /// <typeparam name="TResult">返回值类型</typeparam>
         /// <param name="key">预制体资源键值</param>
-        /// <param name="data">面传递给模态板的参数</param>
+        /// <param name="data">传递给模态面板的参数</param>
         /// <param name="callback">结果回调函数</param>
         /// <returns></returns>
         public UniTask<TModal> PushAsync<TModal, TData, TResult>(
@@ -79,6 +79,7 @@ namespace Mochi.Unity.Preview.GUI
                 modal => modal.BindResultCallback(callback));
         }
 
+        //Busy 仅覆盖加载+Prepare+逻辑提交，入场与 Backdrop 淡入并行 fire-and-forget，容器不等待
         private async UniTask<TModal> PushCoreAsync<TModal>(
             string key,
             Func<TModal, CancellationToken, UniTask> prepareAsync,
@@ -97,8 +98,6 @@ namespace Mochi.Unity.Preview.GUI
 
             IsBusy = true;
             StackEntry previousEntry = StackCount == 0 ? null : GetStackEntry(StackCount - 1);
-            GameObject prefab = null;
-            GameObject instance = null;
             TModal modal = null;
             bool committed = false;
             CancellationToken cancellationToken = LifetimeCancellationToken;
@@ -106,125 +105,78 @@ namespace Mochi.Unity.Preview.GUI
             try
             {
                 //禁用前一个模态面板的交互
-                if (previousEntry != null)
+                if (previousEntry != null && previousEntry.Panel != null)
                 {
                     previousEntry.Panel.SetInteractable(false);
                 }
 
-                //加载预制体资源
-                prefab = await Loader.LoadAsync(key, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (prefab == null)
-                {
-                    return null;
-                }
-
-                instance = Instantiate(prefab, transform, false);
-                instance.SetActive(false);
-
-                modal = instance.GetComponent<TModal>();
+                //工厂完成加载、绑定（Bind 与结果回调）、Prepare 与 OnOpen；失败返回 null 或抛出并已自收尾
+                modal = await PanelFactory.CreateAsync<TModal>(
+                    Loader,
+                    key,
+                    transform,
+                    created =>
+                    {
+                        created.Bind(this);
+                        bindCallback?.Invoke(created);
+                    },
+                    prepareAsync,
+                    cancellationToken);
                 if (modal == null)
                 {
-                    //实例缺少 ModalPanel 组件：committed 保持 false，由 finally 集中收尾销毁实例并释放资源
                     return null;
-                }
-
-                modal.Bind(this);
-                //给modal绑定回调函数
-                bindCallback?.Invoke(modal);
-                await prepareAsync(modal, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                //执行生命周期函数
-                modal.OpenInternal();
-
-                //C1：可见期先 Show 再入场；隐藏期新 Modal 保持逻辑隐藏——
-                //不先 Show 再 Hide、不触发 OnShow、不播放入场与 Backdrop 淡入
-                if (!SuppressVisuals)
-                {
-                    modal.ShowInternal();
-                    modal.SetInteractable(false);
-                }
-                else
-                {
-                    //C1 隐藏期：不执行 OnShow 与入场，保持实例失活；交互组同步禁用，不启用输入
-                    modal.SetInteractable(false);
                 }
 
                 MoveBackdropBelowPanel(modal);
 
-                //backdrop动画和panel进入动画同时执行
-                //（C1：经视觉作用域等待，Hide 停止视觉后按隐藏期规则继续；隐藏期整段跳过）
                 if (!SuppressVisuals)
                 {
-                    UniTask enterTask = RunEnterTransitionAsync(modal, VisualCancellationToken);
-                    UniTask backdropTask = previousEntry == null
-                        ? FadeBackdropAsync(1f, VisualCancellationToken)
-                        : UniTask.CompletedTask;
-                    await WaitVisualTransitionAsync(UniTask.WhenAll(enterTask, backdropTask), cancellationToken);
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
+                    //首个 Modal 入栈：Backdrop 淡入与入场并行（均 fire-and-forget）
+                    if (previousEntry == null)
+                    {
+                        RunBackdropFadeAsync(1f);
+                    }
 
-                //C1：可见期启用交互并交接焦点；隐藏期保持逻辑隐藏、不启用输入。
-                //隐藏期入栈且容器中途恢复显示的 Modal 不在此补播（IsVisible 为假），
-                //由下一次 ShowAsync 的呈现流程按最终栈统一补齐
-                if (!SuppressVisuals && modal.IsVisible)
+                    //显示即提交状态、启用输入与焦点，入场过渡由 Panel fire-and-forget
+                    modal.Show();
+                }
+                else
                 {
-                    modal.SetInteractable(true);
-                    modal.FocusDefaultInternal();
+                    //隐藏期：不执行 OnShow 与入场，保持实例失活；交互组同步禁用，不启用输入
+                    modal.SetInteractable(false);
                 }
 
-                //C1：可见期 Push 的入场视觉被 Hide 中断时，Modal 已执行过 Show——
-                //按隐藏期规则收回逻辑隐藏（恰好一次 OnHide）；显示期由 ShowAsync 呈现补齐
-                if (SuppressVisuals && modal.IsVisible)
-                {
-                    modal.HideInternal();
-                }
-
-                AddStackEntry(modal, prefab);
+                AddStackEntry(modal);
                 committed = true;
                 return modal;
             }
             finally
             {
-                //F1：操作级单层 try/finally，未提交（入栈失败）时集中收尾，检测分支只 return
-                //Busy 先于收尾复位：收尾中 Release 抛错时容器仍可用（与 PageContainer 口径一致）
+                //操作级单层 try/finally，未提交（入栈失败）时集中收尾，检测分支只 return；
+                //Busy 先于收尾复位：收尾中抛错时容器仍可用（与 PageContainer 口径一致）
                 IsBusy = false;
 
                 if (!committed)
                 {
-                    RollbackPush(modal, instance, prefab, previousEntry);
+                    RollbackPush(modal, previousEntry);
                 }
             }
         }
 
-        //Push 失败的集中收尾（同步，只服务 Push 失败路径）：销毁失败实例、释放资源、
-        //恢复前一个 Modal 的交互与焦点、复位 Backdrop；由 PushCoreAsync 的 finally 在未提交时调用
-        private void RollbackPush(
-            ModalPanel modal,
-            GameObject instance,
-            GameObject prefab,
-            StackEntry previousEntry)
+        //Push 失败的集中收尾（同步，只服务 Push 失败路径）：销毁失败实例、恢复前一个 Modal 的
+        //交互与焦点、复位 Backdrop；工厂失败（modal 为 null）时资源已由工厂处理，此处只恢复前层与 Backdrop
+        private void RollbackPush(ModalPanel modal, StackEntry previousEntry)
         {
-            //失败实例的 Hide/Close 由 Panel 幂等保证安全；instance 保存原始引用，
-            //组件缺失（modal 为空）或实例已随容器销毁（Unity 侧判空）时仍能正确收尾
-            if (instance != null)
+            //失败实例的收尾由 Panel Close 幂等保证安全；显式释放与销毁即时收回（不等退场动画）
+            if (modal != null)
             {
-                if (modal != null)
-                {
-                    modal.HideInternal();
-                    modal.CloseInternal();
-                    modal.Unbind();
-                }
-
-                Destroy(instance);
+                modal.Unbind();
+                modal.Close();
+                modal.ReleasePrefabHandleImmediate();
+                Destroy(modal.gameObject);
             }
 
-            if (prefab != null)
-            {
-                Loader.Release(prefab);
-            }
-
-            //恢复前一个 Modal 的交互；T1 幂等化后重复 ShowInternal 不再隐式恢复焦点，改为显式焦点补偿
+            //恢复前一个 Modal 的交互；幂等 Show 不再隐式恢复焦点，改为显式焦点补偿
             if (previousEntry != null && previousEntry.Panel != null)
             {
                 previousEntry.Panel.SetInteractable(true);
@@ -235,7 +187,7 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             //恢复 Backdrop 位置与射线状态：首个 Modal 入栈失败时复位为隐藏；
-            //F4：容器已销毁/接管（IsDisposed）时 Backdrop 即将销毁或已随清栈处理，跳过复位
+            //容器已销毁/接管时 Backdrop 即将销毁或已随清栈处理，跳过复位
             if (!IsDisposed)
             {
                 if (StackCount == 0)
@@ -294,121 +246,88 @@ namespace Mochi.Unity.Preview.GUI
             CancelAsync(Current).Forget();
         }
 
-        //Back/Cancel/Complete 共用的单条目收尾：一次只处理当前栈顶，接受后确定关闭、不回滚
-        private async UniTask<bool> BackCoreAsync(bool hasResult, object result)
+        //Back/Cancel/Complete 共用的单条目收尾：容器清理先行——结果登记解绑、Backdrop 与
+        //剩余栈顶恢复、条目解除关系，然后关闭面板（自毁接管）；结果在逻辑清理完成时交付，
+        //不等退场动画与延迟销毁；剩余栈顶恢复抛错也不跳过当前面板关闭（确定关闭、不回滚）
+        private UniTask<bool> BackCoreAsync(bool hasResult, object result)
         {
             IsBusy = true;
             StackEntry currentEntry = GetStackEntry(StackCount - 1);
             StackEntry nextTop = StackCount >= 2 ? GetStackEntry(StackCount - 2) : null;
             Action notification = null;
-            CancellationToken cancellationToken = LifetimeCancellationToken;
 
             try
             {
-                //R2 实例有效性检查：实例可能在 Back 前已被外部销毁，仅存活时禁用交互并运行退出过渡
-                if (currentEntry.Panel != null)
-                {
-                    currentEntry.Panel.SetInteractable(false);
-                }
+                //登记与解绑是纯 C# 操作，实例已提前销毁时仍可执行
+                ModalPanel modal = (ModalPanel)currentEntry.Panel;
+                notification = modal.CaptureResultNotification(hasResult, result);
+                modal.Unbind();
 
-                //过渡门控挂起点前，Backdrop 已移动到剩余栈顶之下
+                //Backdrop 移到剩余栈顶之下（视觉定位，不构成同步点）
                 if (nextTop != null)
                 {
                     MoveBackdropBelowPanel(nextTop.Panel);
                 }
 
-                //退出动画只需当前 Modal Exit；最后一个 Modal 退出时与 Backdrop 淡出并行
-                //（F5：普通 WhenAll 等待，不逐项包装、不收集错误）。
-                //C1：隐藏期跳过退出过渡与 Backdrop 淡出，直接进入清理与通知（不等容器显示）
-                if (!SuppressVisuals)
+                RemoveStackEntryAt(StackCount - 1);
+                try
                 {
-                    UniTask exitTask = currentEntry.Panel != null
-                        ? RunExitTransitionAsync(currentEntry.Panel, VisualCancellationToken)
-                        : UniTask.CompletedTask;
-                    UniTask backdropTask = nextTop == null
-                        ? FadeBackdropAsync(0f, VisualCancellationToken)
-                        : UniTask.CompletedTask;
-                    await WaitVisualTransitionAsync(UniTask.WhenAll(exitTask, backdropTask), cancellationToken);
+                    if (!SuppressVisuals)
+                    {
+                        //最后一个 Modal 退出：Backdrop 淡出与退场并行 fire-and-forget
+                        if (nextTop == null)
+                        {
+                            RunBackdropFadeAsync(0f);
+                        }
+
+                        //剩余栈顶恢复显示与输入（退场动画在其上方自行淡出，天然无缝）
+                        if (nextTop != null && nextTop.Panel != null)
+                        {
+                            nextTop.Panel.Show();
+                            nextTop.Panel.SetInteractable(true);
+                            nextTop.Panel.FocusDefaultInternal();
+                        }
+                    }
+                    else if (nextTop == null)
+                    {
+                        //隐藏期无视觉：Backdrop 按最终栈同步复位
+                        SetBackdropAlpha(0f);
+                        SetBackdropRaycasts(false);
+                    }
+                }
+                finally
+                {
+                    //当前 Modal 同步关闭：OnClose 即时提交，退场动画播完后自毁并自释放句柄
+                    if (modal != null)
+                    {
+                        modal.Close();
+                    }
                 }
             }
             finally
             {
-                //F4：销毁/Busy 关闭接管（IsDisposed 前移）已接管整栈时，Back 的异步收尾
-                //不再登记通知、清理条目、移除索引、复位 Backdrop 或恢复剩余栈顶，
-                //防止重复释放与错误索引；接管方会按同一所有权规则完成清理与通知交付
+                //销毁/Busy 关闭接管整栈时，收尾不再交付本次登记的通知；
+                //接管方按同一所有权规则完成清理与通知交付
                 if (!IsDisposed)
                 {
-                    //R5：退出动画失败/取消也不恢复当前 Modal，继续清理；
-                    //无论实例是否存活都登记通知、释放资源并移除条目（防重复释放）。
-                    //登记与 Unbind 是纯 C# 操作，实例已销毁时仍可执行，通知按条目交付不依赖 Panel 存活
-                    ModalPanel modal = (ModalPanel)currentEntry.Panel;
-                    notification = modal.CaptureResultNotification(hasResult, result);
-                    modal.Unbind();
-
-                    if (modal != null)
-                    {
-                        //Hide/Close 由 Panel 幂等保证安全，失败实例不再重新入场
-                        modal.HideInternal();
-                        modal.CloseInternal();
-                        Destroy(modal.gameObject);
-                    }
-
-                    //F4 所有权转移：先移出条目再释放引用（销毁清栈不再拿到同一条目，防重复 Release）；
-                    //移除仍晚于 Hide/Close 步骤：生命周期抛错时条目保留在栈内，由后续清栈接管
-                    RemoveStackEntryAt(StackCount - 1);
-
-                    if (currentEntry.Prefab != null)
-                    {
-                        Loader.Release(currentEntry.Prefab);
-                    }
-
-                    //更新 Backdrop 与剩余栈顶交互/焦点（外层已保证容器可用）
-                    if (nextTop == null)
-                    {
-                        SetBackdropAlpha(0f);
-                        SetBackdropRaycasts(false);
-                    }
-                    else
-                    {
-                        MoveBackdropBelowPanel(nextTop.Panel);
-                        SetBackdropRaycasts(true);
-                        if (nextTop.Panel != null)
-                        {
-                            //C1：仅可见期恢复剩余栈顶显示与输入；隐藏期不 Show 前层、不启用输入，
-                            //由下一次 ShowAsync 的呈现流程按最终栈统一恢复
-                            if (!SuppressVisuals)
-                            {
-                                nextTop.Panel.SetInteractable(true);
-                                nextTop.Panel.ShowInternal();
-                                //T1 幂等化后 ShowInternal 不再隐式恢复焦点，改为显式焦点补偿
-                                if (nextTop.Panel.IsVisible)
-                                {
-                                    nextTop.Panel.FocusDefaultInternal();
-                                }
-                            }
-                        }
-                    }
-
                     IsBusy = false;
 
                     //清理完成、Busy 解除后按条目交付通知；
-                    //回调异常已由 InvokeSafely 隔离，不会掩盖过渡异常
+                    //回调异常已由 InvokeSafely 隔离，不会掩盖收尾异常
                     notification?.Invoke();
                 }
             }
 
-            return true;
+            return UniTask.FromResult(true);
         }
 
-        //C1：容器显示的呈现流程——按多层展示规则恢复所需层并同步 Backdrop：
-        //全部条目按最终栈执行 OnShow 与入场（隐藏期入栈的层在此补齐，不重放隐藏期中间态），
-        //Backdrop 依最终栈恢复淡入或保持在场；动画结束后仅启用栈顶层输入
-        protected override async UniTask PresentOnShowAsync()
+        //容器显示的呈现流程：按多层展示规则恢复所需层并同步 Backdrop——
+        //全部条目执行显示（入场自行 fire-and-forget），仅栈顶层保留交互
+        protected override void PresentOnShow()
         {
             if (StackCount == 0)
             {
-                //无 Modal：Backdrop 按最终栈复位为隐藏（状态同步，不播放淡出；
-                //容器未 Initialize 即调用 ShowAsync 属误用，此处沿用 R2 风格判空兜底）
+                //无 Modal：Backdrop 按最终栈复位为隐藏（状态同步，不播放淡出）
                 if (backdrop != null)
                 {
                     SetBackdropAlpha(0f);
@@ -421,52 +340,47 @@ namespace Mochi.Unity.Preview.GUI
             //Backdrop 同步到当前栈顶之下
             MoveBackdropBelowPanel(GetStackEntry(StackCount - 1).Panel);
 
-            //呈现中再次隐藏：不启动视觉、不启用输入，由下一次 ShowAsync 呈现最终态
-            if (!IsVisible)
-            {
-                return;
-            }
-
-            List<UniTask> visuals = new List<UniTask>();
             for (int index = 0; index < StackCount; index++)
             {
                 Panel layer = GetStackEntry(index).Panel;
-                //隐藏期入栈的层在此执行 OnShow；已显示层由幂等空操作，入场同理不再重复播放
-                bool layerWasVisible = layer.IsVisible;
-                layer.ShowInternal();
-                layer.SetInteractable(false);
-                if (!layerWasVisible)
+                if (layer != null)
                 {
-                    visuals.Add(RunEnterTransitionAsync(layer, VisualCancellationToken));
+                    //隐藏期入栈的层在此执行显示；已显示层由幂等空操作
+                    layer.Show();
                 }
             }
 
             //Backdrop 同步：依最终栈恢复淡入（隐藏期跳过淡入时 alpha 可能仍为 0）或保持在场
             if (backdropCanvasGroup.alpha < 1f)
             {
-                visuals.Add(FadeBackdropAsync(1f, VisualCancellationToken));
+                RunBackdropFadeAsync(1f);
             }
             else
             {
                 SetBackdropRaycasts(true);
             }
 
-            await WaitVisualTransitionAsync(UniTask.WhenAll(visuals), LifetimeCancellationToken);
-
-            //动画结束后仅启用栈顶层输入；呈现中再次隐藏/接管则不启用（销毁按 F4 以取消异常向上传播）
-            if (IsVisible && !IsDisposed)
+            //多层展示规则：仅栈顶层可交互，其余层回收输入（Show 已统一启用）
+            for (int index = 0; index < StackCount - 1; index++)
             {
-                Panel top = GetStackEntry(StackCount - 1).Panel;
-                top.SetInteractable(true);
+                Panel layer = GetStackEntry(index).Panel;
+                if (layer != null)
+                {
+                    layer.SetInteractable(false);
+                }
+            }
+
+            Panel top = GetStackEntry(StackCount - 1).Panel;
+            if (top != null)
+            {
                 top.FocusDefaultInternal();
             }
         }
 
         protected override void OnClose()
         {
-            //F4 收尾（2026-09-12）：父容器关闭触发本容器 OnClose 且本容器 Busy 时立即接管，
-            //不排队/挂起：先标记不可用并取消在途操作，在途 Back/Push 的异步收尾据此跳过条目清理，
-            //清栈由下方 ClearModals 与销毁共用同一套所有权规则
+            //父容器关闭触发本容器 OnClose 且 Busy 时立即接管（不排队）：
+            //先标记不可用并取消在途操作，清栈由 ClearModals 与销毁共用所有权规则
             if (IsBusy)
             {
                 BeginBusyTakeOver();
@@ -477,7 +391,7 @@ namespace Mochi.Unity.Preview.GUI
             List<Action> notifications;
             try
             {
-                notifications = ClearModals();
+                notifications = ClearModals(immediateDestroy: false);
                 //Modal 额外复位 Backdrop：属于容器自身状态清理，随清栈完成、先于通知交付
                 SetBackdropAlpha(0f);
                 SetBackdropRaycasts(false);
@@ -496,12 +410,10 @@ namespace Mochi.Unity.Preview.GUI
             base.OnClose();
         }
 
-        //R4 共用清栈：从栈顶向下逐条目先移出栈（所有权转移）再同步清理——关闭仍存活实例、
-        //销毁实例、释放条目 Prefab 引用；移出后的条目不会被后续清栈重复处理。另收集每个条目的
-        //无结果通知并解绑，方法内部不执行任何外部回调，由调用方在清理完成后交付。
-        //通知登记不依赖实例存活（Modal 已提前销毁时回调由栈条目持有）；生命周期调用不做
-        //IsVisible/IsOpen 包裹判断，由 Panel 内部幂等与 Unity 有效性检查决定（R2/R3）
-        private List<Action> ClearModals()
+        //共用清栈：从栈顶向下逐条目先解除关系（移出栈）、登记解绑再关闭面板；
+        //immediateDestroy 为真时（销毁强杀）显式释放与销毁、不等退场动画。
+        //另收集每个条目的无结果通知，由调用方在清理完成后交付
+        private List<Action> ClearModals(bool immediateDestroy)
         {
             List<Action> notifications = new List<Action>();
             while (StackCount > 0)
@@ -514,21 +426,50 @@ namespace Mochi.Unity.Preview.GUI
                 notifications.Add(modal.CaptureResultNotification(false, null));
                 modal.Unbind();
 
-                //R2 实例有效性检查：仅存活实例执行生命周期调用与销毁；资源释放不放在实例分支内
+                //实例有效性检查：仅存活实例执行生命周期调用与销毁
                 if (entry.Panel != null)
                 {
-                    modal.HideInternal();
-                    modal.CloseInternal();
-                    Destroy(entry.Panel.gameObject);
-                }
-
-                if (entry.Prefab != null)
-                {
-                    Loader.Release(entry.Prefab);
+                    modal.Close();
+                    if (immediateDestroy)
+                    {
+                        modal.ReleasePrefabHandleImmediate();
+                        Destroy(entry.Panel.gameObject);
+                    }
                 }
             }
 
             return notifications;
+        }
+
+        //面板未经容器自行关闭：条目已抽出、其余条目顺序不变；
+        //外部中止按无结果交付；栈顶被关闭时恢复剩余栈顶与 Backdrop
+        protected override void HandleSelfClosedPanel(Panel panel, bool wasTop)
+        {
+            ModalPanel modal = panel as ModalPanel;
+            Action notification = modal != null
+                ? modal.CaptureResultNotification(false, null)
+                : null;
+            modal?.Unbind();
+
+            if (StackCount == 0)
+            {
+                SetBackdropAlpha(0f);
+                SetBackdropRaycasts(false);
+            }
+            else if (wasTop)
+            {
+                Panel top = GetStackEntry(StackCount - 1).Panel;
+                MoveBackdropBelowPanel(top);
+                SetBackdropRaycasts(true);
+                if (!SuppressVisuals && top != null)
+                {
+                    top.Show();
+                    top.SetInteractable(true);
+                    top.FocusDefaultInternal();
+                }
+            }
+
+            notification?.Invoke();
         }
 
         private async UniTask FadeBackdropAsync(float targetAlpha, CancellationToken cancellationToken)
@@ -557,6 +498,19 @@ namespace Mochi.Unity.Preview.GUI
             cancellationToken.ThrowIfCancellationRequested();
             SetBackdropAlpha(targetAlpha);
             SetBackdropRaycasts(targetAlpha > 0f);
+        }
+
+        //Backdrop 淡入淡出保持容器侧视觉，但不再构成任何操作的同步点：
+        //fire-and-forget，随容器销毁取消时安静结束
+        private async UniTaskVoid RunBackdropFadeAsync(float targetAlpha)
+        {
+            try
+            {
+                await FadeBackdropAsync(targetAlpha, LifetimeCancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+            }
         }
 
         //创建Backdrop；仅在Initialize中调用一次，由容器独占管理并随容器销毁，不再自动重建
@@ -589,7 +543,7 @@ namespace Mochi.Unity.Preview.GUI
 
         private void MoveBackdropBelowPanel(Panel panel)
         {
-            //目标Panel可能已销毁的调用边界由R2处理，这里保留判空
+            //目标Panel可能已销毁的调用边界由实例有效性检查处理，这里保留判空
             if (panel == null)
             {
                 return;
@@ -620,10 +574,9 @@ namespace Mochi.Unity.Preview.GUI
 
         protected override void CleanupStackOnDestroy()
         {
-            //R4：销毁路径复用同一清栈方法（不访问即将销毁的 Backdrop）；
-            //销毁入口（StackContainer.OnDestroy）已先标记不可用并取消在途操作，
-            //通知在清理完成后交付，此时容器已不可用、不能接受新导航
-            List<Action> notifications = ClearModals();
+            //销毁路径复用同一清栈方法（强杀口径：立即释放与销毁，不访问即将销毁的 Backdrop）；
+            //销毁入口已先标记不可用并取消在途操作，通知在清理完成后交付
+            List<Action> notifications = ClearModals(immediateDestroy: true);
 
             foreach (Action notification in notifications)
             {

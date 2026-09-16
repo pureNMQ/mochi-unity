@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -5,13 +6,20 @@ using UnityEngine.EventSystems;
 
 namespace Mochi.Unity.Preview.GUI
 {
-    public abstract class Panel : MonoBehaviour, IPanel, IPanelLifecycle
+    public abstract class Panel : MonoBehaviour, IPanel
     {
         [SerializeField] private GameObject defaultFocusTarget;
 
         public bool IsOpen { get; private set; }
         public bool IsVisible { get; private set; }
         public GameObject DefaultFocusTarget => defaultFocusTarget;
+
+        /// <summary>显示完成（状态已提交）时通知外部订阅者</summary>
+        public event Action<Panel> Shown;
+        /// <summary>隐藏完成（状态已提交）时通知外部订阅者</summary>
+        public event Action<Panel> Hidden;
+        /// <summary>逻辑关闭完成（状态已提交）时通知外部订阅者；退场动画与自毁随后自行完成</summary>
+        public event Action<Panel> Closed;
 
         public CanvasGroup CanvasGroup
         {
@@ -28,8 +36,11 @@ namespace Mochi.Unity.Preview.GUI
 
         private CanvasGroup canvasGroup;
         private GameObject savedFocusTarget;
-        // 自上一次成功 Open 以来是否已执行过 Close；作为 CloseInternal 的幂等判定依据（见 CloseInternal 注释）
-        private bool closeExecuted;
+        //关闭中状态：Close 已受理、收尾流程在途，Show/Hide/Close 重入一律拒绝
+        private bool closing;
+        //工厂注入的 Prefab 句柄与释放入口；未注入（直接构造）保持 null
+        private IPanelLoader prefabLoader;
+        private GameObject prefabHandle;
 
         /// <summary>
         /// 设置面板是否可交互
@@ -71,7 +82,6 @@ namespace Mochi.Unity.Preview.GUI
 
         internal void OpenInternal()
         {
-            // 幂等：已处于打开状态时重复请求为空操作，不重复执行 OnOpen
             if (IsOpen)
             {
                 return;
@@ -79,15 +89,14 @@ namespace Mochi.Unity.Preview.GUI
 
             OnOpen();
             IsOpen = true;
-            closeExecuted = false;
+            closing = false;
         }
 
-        internal void ShowInternal()
+        //公开同步显示：执行即提交可见状态，输入与焦点随状态立即启用，
+        //入场过渡由 Panel 检测组件后 fire-and-forget，调用方不等待动画
+        public void Show()
         {
-            // 幂等：已处于显示状态时重复请求为空操作，不重复执行 OnShow。
-            // 注意：重复 Show 不再隐式恢复焦点（原副作用已按 R3 契约移除），
-            // 需要恢复焦点的场景应由调用方显式调用 Focus（容器侧由后续任务补偿）。
-            if (IsVisible)
+            if (closing || IsVisible)
             {
                 return;
             }
@@ -95,14 +104,17 @@ namespace Mochi.Unity.Preview.GUI
             gameObject.SetActive(true);
             OnShow();
             IsVisible = true;
+            SetInteractable(true);
             RestoreFocusInternal();
+            Shown?.Invoke(this);
+            FireTransitionAsync(enter: true).Forget();
         }
 
-        internal void HideInternal()
+        //公开同步隐藏：执行即提交隐藏状态并立即停用实例（视觉即时消失），
+        //退场过渡 fire-and-forget 由组件在失活实例上自行追赶
+        public virtual void Hide()
         {
-            // 幂等：已处于隐藏状态时重复请求为空操作，
-            // 不重复保存焦点（避免覆盖首次隐藏时记录的目标）、不重复执行 OnHide
-            if (!IsVisible)
+            if (closing || !IsVisible)
             {
                 return;
             }
@@ -111,26 +123,71 @@ namespace Mochi.Unity.Preview.GUI
             OnHide();
             gameObject.SetActive(false);
             IsVisible = false;
+            Hidden?.Invoke(this);
+            FireTransitionAsync(enter: false).Forget();
         }
 
-        internal void CloseInternal()
+        //公开同步关闭：逻辑立即关闭并进入 closing 拒绝重入；关闭决策不可逆，
+        //生命周期回调抛错不阻断状态提交、Closed 通知与自毁调度（finally 保证）
+        public void Close()
         {
-            // 幂等：按「自上一次 Open 以来是否已执行过 Close」判定，而非仅按 IsOpen 判定。
-            // 原因：容器（PageContainer/ModalContainer）自身从不 Open，却复用 Panel.OnClose
-            // 作为栈清理入口（生产与既有测试均如此）；若仅按 IsOpen 判定，从未打开的面板
-            // 第一次 Close 就会被跳过，容器清理直接失效。该判定保证：
-            // 重复 Close 恒为空操作；Open→Close→Open→Close 时 OnClose 每个打开周期各执行一次；
-            // 从未 Open 的面板首次 Close 仍执行一次清理，与既有行为一致。
-            if (closeExecuted)
+            if (closing)
             {
                 return;
             }
 
-            OnClose();
-            IsOpen = false;
-            closeExecuted = true;
+            closing = true;
+            try
+            {
+                if (IsVisible)
+                {
+                    SaveFocusInternal();
+                    OnHide();
+                    IsVisible = false;
+                    Hidden?.Invoke(this);
+                    //不立即停用：退场动画需在存活实例上播放，视觉延后追赶逻辑状态
+                }
+
+                SetInteractable(false);
+                OnClose();
+            }
+            finally
+            {
+                IsOpen = false;
+                Closed?.Invoke(this);
+                FinishCloseAfterExitAsync().Forget();
+            }
         }
 
+        //关闭后的实例处置：工厂创建的 Prefab 面板播完退场动画自毁；
+        //运行时容器由持有方管理存活（关闭仅做逻辑收尾），覆写为 false
+        protected virtual bool DestroySelfOnClose => true;
+
+        internal void BindPrefabHandle(IPanelLoader loader, GameObject prefab)
+        {
+            prefabLoader = loader;
+            prefabHandle = prefab;
+        }
+
+        // Unity 只对曾激活过的对象保证 OnDestroy 回调，未激活实例须销毁前在此显式释放
+        internal void ReleasePrefabHandleImmediate()
+        {
+            if (prefabHandle == null)
+            {
+                return;
+            }
+
+            GameObject handle = prefabHandle;
+            IPanelLoader loader = prefabLoader;
+            prefabHandle = null;
+            prefabLoader = null;
+            loader?.Release(handle);
+        }
+
+        protected virtual void OnDestroy()
+        {
+            ReleasePrefabHandleImmediate();
+        }
 
         internal void FocusDefaultInternal()
         {
@@ -144,34 +201,76 @@ namespace Mochi.Unity.Preview.GUI
                 : EventSystem.current.currentSelectedGameObject;
         }
 
-        //internal：容器需要把「恢复已保存焦点」作为最小显式补偿调用
-        //（PageContainer.Push 隐藏前页前先把选择还给前页的焦点记忆、失败收尾时恢复前页焦点），
-        //仅开放既有实现，不新增焦点所有权状态，焦点系统仍由后续任务处理
+        //容器以「恢复已保存焦点」作为显式补偿调用，不新增焦点所有权状态
         internal void RestoreFocusInternal()
         {
             Focus(savedFocusTarget ?? defaultFocusTarget);
         }
 
-        // IPanelLifecycle 显式实现：生命周期契约入口收敛到 internal 接口，公共 API 表面不暴露；
-        // 同程序集容器仍可直接调用上方 internal 方法，外部程序集两者皆不可达（C2 边界）。
-        void IPanelLifecycle.OpenInternal()
+        //过渡检测与触发归 Panel 内部：fire-and-forget，容器不感知、不等待
+        private async UniTaskVoid FireTransitionAsync(bool enter)
         {
-            OpenInternal();
+            IPanelTransition transition = GetComponent<IPanelTransition>();
+            if (transition == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (enter)
+                {
+                    await transition.EnterAsync(destroyCancellationToken);
+                }
+                else
+                {
+                    await transition.ExitAsync(destroyCancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                //实例销毁取消过渡：视觉无需继续追赶
+            }
         }
 
-        void IPanelLifecycle.CloseInternal()
+        //关闭收尾：等待退场动画播完再释放句柄并按配置自毁，自毁不因过渡错误中断；
+        //外部强杀先行时由 OnDestroy 兜底释放；过渡错误在处置完成后原样上抛（归组件观察）
+        private async UniTaskVoid FinishCloseAfterExitAsync()
         {
-            CloseInternal();
-        }
+            Exception exitError = null;
+            IPanelTransition transition = GetComponent<IPanelTransition>();
+            if (transition != null)
+            {
+                try
+                {
+                    await transition.ExitAsync(destroyCancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    //实例销毁先行：句柄已由 OnDestroy 兜底释放，无需继续处置
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    exitError = exception;
+                }
+            }
 
-        void IPanelLifecycle.ShowInternal()
-        {
-            ShowInternal();
-        }
+            if (this == null)
+            {
+                return;
+            }
 
-        void IPanelLifecycle.HideInternal()
-        {
-            HideInternal();
+            ReleasePrefabHandleImmediate();
+            if (DestroySelfOnClose)
+            {
+                Destroy(gameObject);
+            }
+
+            if (exitError != null)
+            {
+                throw exitError;
+            }
         }
 
         /// <summary>

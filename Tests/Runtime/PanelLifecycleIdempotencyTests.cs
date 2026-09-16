@@ -9,9 +9,7 @@ using UnityEngine.TestTools;
 namespace Mochi.Unity.Preview.GUI.Tests
 {
     /// <summary>
-    /// R3/R7：Panel 生命周期内部幂等与 IPanel 契约验证。
-    /// 只测 Panel 本身，不推入容器；internal 生命周期方法经反射调用
-    /// （测试程序集无 InternalsVisibleTo，沿用 ModalContainerLifecycleTests 的模式）。
+    /// Panel 生命周期幂等与 IPanel 契约验证：只测 Panel 本身，不推入容器。
     /// </summary>
     public class PanelLifecycleIdempotencyTests
     {
@@ -29,18 +27,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator ShowInternal_WhenAlreadyVisible_IsNoOp()
+        public IEnumerator Show_WhenAlreadyVisible_IsNoOp()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel();
-                InvokeLifecycle(panel, "ShowInternal");
+                panel.Show();
                 Assert.That(panel.IsVisible, Is.True);
                 Assert.That(panel.gameObject.activeSelf, Is.True);
                 Assert.That(panel.ShowCount, Is.EqualTo(1));
 
                 //重复 Show：不再触发 OnShow，也不激活/迁移任何状态（旧实现会在此恢复焦点）
-                InvokeLifecycle(panel, "ShowInternal");
+                panel.Show();
                 Assert.That(panel.ShowCount, Is.EqualTo(1));
                 Assert.That(panel.IsVisible, Is.True);
                 Assert.That(panel.gameObject.activeSelf, Is.True);
@@ -49,37 +47,37 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator HideInternal_WhenAlreadyHidden_IsNoOp()
+        public IEnumerator Hide_WhenAlreadyHidden_IsNoOp()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel(false);
-                InvokeLifecycle(panel, "HideInternal");
+                panel.Hide();
                 Assert.That(panel.HideCount, Is.Zero);
                 Assert.That(panel.IsVisible, Is.False);
                 Assert.That(panel.gameObject.activeSelf, Is.False);
 
-                InvokeLifecycle(panel, "HideInternal");
+                panel.Hide();
                 Assert.That(panel.HideCount, Is.Zero);
                 await UniTask.Yield();
             });
         }
 
         [UnityTest]
-        public IEnumerator HideInternal_AfterShown_HidesOnlyOncePerTransition()
+        public IEnumerator Hide_AfterShown_HidesOnlyOncePerTransition()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel();
-                InvokeLifecycle(panel, "ShowInternal");
-                InvokeLifecycle(panel, "HideInternal");
+                panel.Show();
+                panel.Hide();
                 Assert.That(panel.ShowCount, Is.EqualTo(1));
                 Assert.That(panel.HideCount, Is.EqualTo(1));
                 Assert.That(panel.IsVisible, Is.False);
                 Assert.That(panel.gameObject.activeSelf, Is.False);
 
                 //重复 Hide：不重复保存焦点、不重复执行 OnHide
-                InvokeLifecycle(panel, "HideInternal");
+                panel.Hide();
                 Assert.That(panel.HideCount, Is.EqualTo(1));
                 await UniTask.Yield();
             });
@@ -91,11 +89,11 @@ namespace Mochi.Unity.Preview.GUI.Tests
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel();
-                InvokeLifecycle(panel, "OpenInternal");
+                InvokeOpenInternal(panel);
                 Assert.That(panel.IsOpen, Is.True);
                 Assert.That(panel.OpenCount, Is.EqualTo(1));
 
-                InvokeLifecycle(panel, "OpenInternal");
+                InvokeOpenInternal(panel);
                 Assert.That(panel.OpenCount, Is.EqualTo(1));
                 Assert.That(panel.IsOpen, Is.True);
                 await UniTask.Yield();
@@ -103,17 +101,17 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator CloseInternal_WhenAlreadyClosed_IsNoOp()
+        public IEnumerator Close_WhenAlreadyClosed_IsNoOp()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel();
-                InvokeLifecycle(panel, "OpenInternal");
-                InvokeLifecycle(panel, "CloseInternal");
+                InvokeOpenInternal(panel);
+                panel.Close();
                 Assert.That(panel.IsOpen, Is.False);
                 Assert.That(panel.CloseCount, Is.EqualTo(1));
 
-                InvokeLifecycle(panel, "CloseInternal");
+                panel.Close();
                 Assert.That(panel.CloseCount, Is.EqualTo(1));
                 Assert.That(panel.IsOpen, Is.False);
                 await UniTask.Yield();
@@ -121,18 +119,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator CloseInternal_WhenNeverOpened_RunsCleanupOnceThenIsNoOp()
+        public IEnumerator Close_WhenNeverOpened_RunsCleanupOnceThenIsNoOp()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 //容器（PageContainer/ModalContainer）自身从不 Open，却复用 OnClose 做栈清理；
                 //从未打开的面板首次 Close 仍执行一次清理，之后重复 Close 为空操作
                 CountingPanel panel = CreatePanel();
-                InvokeLifecycle(panel, "CloseInternal");
+                panel.Close();
                 Assert.That(panel.CloseCount, Is.EqualTo(1));
                 Assert.That(panel.IsOpen, Is.False);
 
-                InvokeLifecycle(panel, "CloseInternal");
+                panel.Close();
                 Assert.That(panel.CloseCount, Is.EqualTo(1));
                 await UniTask.Yield();
             });
@@ -145,17 +143,17 @@ namespace Mochi.Unity.Preview.GUI.Tests
             {
                 CountingPanel panel = CreatePanel(false);
                 //隐藏→显示
-                InvokeLifecycle(panel, "ShowInternal");
+                panel.Show();
                 Assert.That(panel.ShowCount, Is.EqualTo(1));
                 Assert.That(panel.HideCount, Is.Zero);
                 Assert.That(panel.IsVisible, Is.True);
                 //显示→隐藏
-                InvokeLifecycle(panel, "HideInternal");
+                panel.Hide();
                 Assert.That(panel.HideCount, Is.EqualTo(1));
                 Assert.That(panel.IsVisible, Is.False);
                 //隐藏→显示→隐藏：每次迁移各触发一次
-                InvokeLifecycle(panel, "ShowInternal");
-                InvokeLifecycle(panel, "HideInternal");
+                panel.Show();
+                panel.Hide();
                 Assert.That(panel.ShowCount, Is.EqualTo(2));
                 Assert.That(panel.HideCount, Is.EqualTo(2));
                 Assert.That(panel.IsVisible, Is.False);
@@ -170,14 +168,14 @@ namespace Mochi.Unity.Preview.GUI.Tests
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel();
-                InvokeLifecycle(panel, "OpenInternal");
-                InvokeLifecycle(panel, "CloseInternal");
+                InvokeOpenInternal(panel);
+                panel.Close();
                 Assert.That(panel.OpenCount, Is.EqualTo(1));
                 Assert.That(panel.CloseCount, Is.EqualTo(1));
 
                 //重新打开后再关闭：每个打开周期各执行一次 OnOpen/OnClose
-                InvokeLifecycle(panel, "OpenInternal");
-                InvokeLifecycle(panel, "CloseInternal");
+                InvokeOpenInternal(panel);
+                panel.Close();
                 Assert.That(panel.OpenCount, Is.EqualTo(2));
                 Assert.That(panel.CloseCount, Is.EqualTo(2));
                 Assert.That(panel.IsOpen, Is.False);
@@ -186,18 +184,21 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator IPanelContract_ExposesStateAndInteractability()
+        public IEnumerator IPanelContract_ExposesStateInteractabilityAndLifecycle()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel();
-                InvokeLifecycle(panel, "OpenInternal");
-                InvokeLifecycle(panel, "ShowInternal");
+                InvokeOpenInternal(panel);
 
-                //经公共契约访问：状态查询与交互控制；生命周期入口不在公共契约上（C2）
+                //经公共契约访问：状态查询、交互控制与生命周期入口
                 IPanel contract = panel;
                 Assert.That(contract.IsOpen, Is.True);
+
+                contract.Show();
                 Assert.That(contract.IsVisible, Is.True);
+                contract.Hide();
+                Assert.That(contract.IsVisible, Is.False);
 
                 contract.SetInteractable(false);
                 Assert.That(panel.CanvasGroup.interactable, Is.False);
@@ -208,6 +209,16 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(panel.CanvasGroup.blocksRaycasts, Is.True);
                 await UniTask.Yield();
             });
+        }
+
+        //OpenInternal 保持程序集内部（工厂调用），测试程序集经反射访问
+        private static void InvokeOpenInternal(Panel panel)
+        {
+            MethodInfo method = typeof(Panel).GetMethod(
+                "OpenInternal",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null, "Panel.OpenInternal 应以 internal 方法形式存在");
+            method.Invoke(panel, null);
         }
 
         private CountingPanel CreatePanel(bool active = true)
@@ -221,15 +232,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
             }
 
             return panelObject.AddComponent<CountingPanel>();
-        }
-
-        private static void InvokeLifecycle(Panel panel, string methodName)
-        {
-            MethodInfo method = typeof(Panel).GetMethod(
-                methodName,
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.That(method, Is.Not.Null, $"Panel.{methodName} 应以 internal 方法形式存在");
-            method.Invoke(panel, null);
         }
 
         private GameObject Track(GameObject target)

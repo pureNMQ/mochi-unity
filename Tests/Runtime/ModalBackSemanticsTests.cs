@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -142,6 +143,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 //栈清空后的请求同样拒绝且不产生新通知（Busy 拒绝不通知由 Behavior 用例覆盖）
                 Assert.That(await container.BackAsync(), Is.False);
                 Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
+                //等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
             });
         }
@@ -169,7 +172,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(await container.BackAsync(), Is.True);
 
-                //T1 幂等化后 ShowInternal 不再隐式恢复焦点，Back 完成后对仍可见的 nextTop 显式补偿
+                //幂等化后 Show 不再隐式恢复焦点，Back 完成后对仍可见的 nextTop 显式补偿
                 Assert.That(container.Current, Is.SameAs(first));
                 Assert.That(container.StackCount, Is.EqualTo(1));
                 Assert.That(first.gameObject.activeSelf, Is.True);
@@ -179,7 +182,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator PushFailure_RestoresPreviousInteractionAndFocusAndCleansUp()
+        public IEnumerator Push_WhenEnterThrows_CommitsAndLeavesErrorToTransitionComponent()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -198,32 +201,22 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(EventSystem.current.currentSelectedGameObject, Is.SameAs(focusFirst));
 
                 List<string> notifications = new List<string>();
-                Exception caught = null;
-                try
-                {
-                    await container.PushAsync<EnterFailureModal, string>(
-                        "Bad",
-                        new ModalResultCallback<string>((valid, value) => notifications.Add($"{valid}:{value}")));
-                }
-                catch (Exception exception)
-                {
-                    caught = exception;
-                }
+                //新契约：入场过渡 fire-and-forget，Enter 抛错归组件——Push 照常提交
+                LogAssert.Expect(LogType.Exception, new Regex("EnterFailureException"));
+                EnterFailureModal second = await container.PushAsync<EnterFailureModal, string>(
+                    "Bad",
+                    new ModalResultCallback<string>((valid, value) => notifications.Add($"{valid}:{value}")));
 
-                //F1：Push 失败走 finally 集中收尾，前一个 Modal 恢复交互并显式补偿焦点
-                Assert.That(caught, Is.TypeOf<EnterFailureException>());
+                Assert.That(second, Is.Not.Null);
                 Assert.That(container.IsBusy, Is.False);
-                Assert.That(container.StackCount, Is.EqualTo(1));
-                Assert.That(container.Current, Is.SameAs(first));
+                Assert.That(container.StackCount, Is.EqualTo(2));
+                Assert.That(container.Current, Is.SameAs(second));
+                //下层 Modal 保持可见但不可交互；新栈顶接管焦点（D1）
                 Assert.That(first.gameObject.activeSelf, Is.True);
-                Assert.That(first.CanvasGroup.interactable, Is.True);
-                Assert.That(EventSystem.current.currentSelectedGameObject, Is.SameAs(focusFirst));
+                Assert.That(first.CanvasGroup.interactable, Is.False);
+                Assert.That(second.CanvasGroup.interactable, Is.True);
 
-                //失败实例被销毁、预制体已释放、未提交的回调不产生通知
-                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
-                Assert.That(notifications, Is.Empty);
                 await UniTask.DelayFrame(1);
-                Assert.That(containerObject.transform.Find("Bad(Clone)"), Is.Null);
             });
         }
 

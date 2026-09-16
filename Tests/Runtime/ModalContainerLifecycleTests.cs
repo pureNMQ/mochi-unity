@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -47,7 +48,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     "callback:top:False:",
                     "event:top:False:"
                 }));
-                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
+                container.Close();
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(notifications, Is.EqualTo(new[]
                 {
@@ -58,6 +59,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     "callback:root:False:",
                     "event:root:False:"
                 }));
+                //等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(3));
             });
         }
@@ -89,6 +92,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(await first.CancelResultAsync(), Is.True);
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(firstCallbackCount, Is.EqualTo(1));
+                //等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
             });
         }
@@ -116,7 +121,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(next, Is.Not.Null);
                 Assert.That(container.Current, Is.SameAs(next));
                 Assert.That(container.StackCount, Is.EqualTo(1));
-                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
+                container.Close();
+                //等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
             });
         }
@@ -149,6 +156,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(hasResult, Is.False);
                 Assert.That(result, Is.Null);
+                //等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
             });
         }
@@ -174,24 +183,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     new ModalResultCallback<string>((hasResult, result) =>
                         notifications.Add($"second:{hasResult}:{result}")));
 
-                Exception caught = null;
-                try
-                {
-                    await containerObject.BackAsync();
-                }
-                catch (Exception exception)
-                {
-                    caught = exception;
-                }
+                //新契约：退场过渡 fire-and-forget，Exit 抛错归组件——Close 已同步提交，
+                //Back 正常返回，错误经 UniTask 未观察通道记录日志
+                LogAssert.Expect(LogType.Exception, new Regex("ExitFailureException"));
+                Assert.That(await containerObject.BackAsync(), Is.True);
 
-                //R5：Back 不回滚——退出动画抛错仍继续清理（条目移除、实例销毁、资源释放、
-                //前一个 Modal 恢复交互/显示），异常向外传播
-                Assert.That(caught, Is.TypeOf<ExitFailureException>());
                 Assert.That(containerObject.IsBusy, Is.False);
                 Assert.That(containerObject.StackCount, Is.EqualTo(1));
                 Assert.That(containerObject.Current, Is.SameAs(first));
                 Assert.That(first.gameObject.activeSelf, Is.True);
                 Assert.That(first.CanvasGroup.interactable, Is.True);
+                //等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 //清理完成后按条目交付结果，Back 语义为 hasResult=false
                 Assert.That(notifications, Is.EqualTo(new[] { "second:False:" }));
@@ -199,6 +202,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 //容器仍可用：继续 Back 移除剩余栈顶
                 Assert.That(await containerObject.BackAsync(), Is.True);
                 Assert.That(containerObject.StackCount, Is.EqualTo(0));
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
             });
         }
@@ -254,12 +258,15 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 }
 
                 //F5 可信原则：OnHide 抛错违反 Panel 生命周期契约，容器不防御、不收集错误；
-                //单层 try/finally 下清理在抛错步骤停止：条目未移除、资源未释放、Busy 未复位、通知未交付
+                //新契约：容器清理先行（条目已解除）、Close 状态提交与自毁由 finally 保证完成，
+                //异常原样传播；nextTop 恢复步骤被跳过（无下一层时不涉及）
                 Assert.That(caught, Is.TypeOf<CleanupFailureException>());
-                Assert.That(container.IsBusy, Is.True);
-                Assert.That(container.StackCount, Is.EqualTo(1));
-                Assert.That(notifications, Is.Empty);
-                Assert.That(loader.ReleaseCount, Is.EqualTo(0));
+                Assert.That(container.IsBusy, Is.False);
+                Assert.That(container.StackCount, Is.EqualTo(0));
+                //通知在清理完成后按条目交付
+                Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
+                await UniTask.Yield();
+                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
             });
         }
 

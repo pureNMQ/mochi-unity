@@ -62,6 +62,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(hasResult, Is.False);
                 Assert.That(callbackResult, Is.Null);
                 Assert.That(container.StackCount, Is.Zero);
+                //等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
             });
         }

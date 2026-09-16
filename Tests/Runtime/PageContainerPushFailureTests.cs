@@ -70,7 +70,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(container.StackCount, Is.EqualTo(1));
                 Assert.That(firstPage.IsVisible, Is.True);
                 Assert.That(firstPage.CanvasGroup.interactable, Is.True);
-                //失败收尾显式恢复前页焦点（仍可见前页的 ShowInternal 为空操作，需补偿）
+                //失败收尾显式恢复前页焦点（仍可见前页的 Show 为空操作，需补偿）
                 Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(previousFocus));
                 Assert.That(container.transform.childCount, Is.EqualTo(1));
                 //取消发生在加载成功之后：本次取得的加载引用恰好释放一次

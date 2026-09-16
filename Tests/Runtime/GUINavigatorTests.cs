@@ -44,7 +44,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     Assert.That(page, Is.Not.Null);
                     Assert.That(navigator.Pages, Is.SameAs(container));
                     Assert.That(navigator.Modals, Is.SameAs(modalContainer));
-                    typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(navigator.Pages, null);
+                    navigator.Pages.Close();
+                    //等一帧确保延迟销毁生效
+                    await UniTask.Yield();
                     Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 }
                 finally

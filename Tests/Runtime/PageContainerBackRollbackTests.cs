@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -41,9 +42,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Back_WhenExitThrows_DestroysFailedPageWithoutRollback()
+        public IEnumerator Back_WhenExitThrows_CommitsCloseAndLeavesErrorToTransitionComponent()
         {
-            return UniTask.ToCoroutine(() => RunBackFailureTest(FailureStage.BExit));
+            return UniTask.ToCoroutine(() => RunBackExitFailureTest());
         }
 
         [UnityTest]
@@ -89,7 +90,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
             //Destroy 延迟到帧末，等待一帧后断言失败页已被销毁
             await UniTask.Yield();
 
-            //新契约：Back 不回滚——异常类型与消息保留并继续向外传播
+            //新契约：Back 确定关闭不回滚——生命周期异常类型与消息保留并继续向外传播
             Assert.That(caught, Is.TypeOf<BackFailureException>());
             Assert.That(caught.Message, Is.EqualTo(failureStage.ToString()));
             //Busy 复位；失败页条目已移出栈，仅剩前页
@@ -100,26 +101,61 @@ namespace Mochi.Unity.Preview.GUI.Tests
             //失败页被销毁且 Prefab 引用恰好释放一次（不回滚、不重复 Release）
             Assert.That(secondPage == null, Is.True);
             Assert.That(loader.ReleaseCount, Is.EqualTo(1));
-            //前页恢复交互
-            Assert.That(firstPage.CanvasGroup.interactable, Is.True);
-            Assert.That(firstPage.CanvasGroup.blocksRaycasts, Is.True);
 
             if (failureStage == FailureStage.AOnShow)
             {
-                //前页 OnShow 本身抛错属于生命周期契约破坏，容器不防御（F5）：
-                //激活已完成但 IsVisible 未置位，焦点恢复未执行；
-                //原选中目标随失败页销毁而失效（Unity 判空经 == 运算符重载）
+                //前页 OnShow 抛错属生命周期契约破坏、容器不防御：激活完成但 IsVisible 未置位，
+                //交互保持禁用，原选中目标随失败页销毁失效
                 Assert.That(firstPage.gameObject.activeSelf, Is.True);
                 Assert.That(firstPage.IsVisible, Is.False);
+                Assert.That(firstPage.CanvasGroup.interactable, Is.False);
                 Assert.That(eventSystem.currentSelectedGameObject == null, Is.True);
             }
             else
             {
-                //前页恢复显示，焦点显式恢复到前页自身焦点记忆
+                //前页恢复显示与交互，焦点显式恢复到前页自身焦点记忆
                 Assert.That(firstPage.IsVisible, Is.True);
                 Assert.That(firstPage.gameObject.activeSelf, Is.True);
+                Assert.That(firstPage.CanvasGroup.interactable, Is.True);
+                Assert.That(firstPage.CanvasGroup.blocksRaycasts, Is.True);
                 Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(GetDefaultFocusTarget(firstPage)));
             }
+        }
+
+        //新契约：退场过渡 fire-and-forget，Exit 抛错归组件——Close 已同步提交（自毁自释放），
+        //Back 正常返回，错误经 UniTask 未观察通道记录日志
+        private async UniTask RunBackExitFailureTest()
+        {
+            GameObject eventSystemObject = Track(new GameObject("EventSystem"));
+            EventSystem eventSystem = eventSystemObject.AddComponent<EventSystem>();
+
+            GameObject containerObject = Track(new GameObject("PageContainer"));
+            PageContainer container = containerObject.AddComponent<PageContainer>();
+
+            GameObject firstPrefab = Track(CreatePagePrefab("FirstPagePrefab", FailureStage.None));
+            GameObject secondPrefab = Track(CreatePagePrefab("SecondPagePrefab", FailureStage.BExit));
+            RollbackPanelLoader loader = new RollbackPanelLoader(firstPrefab, secondPrefab);
+            container.Initialize(loader);
+
+            BackRollbackPage firstPage = await container.PushAsync<BackRollbackPage>("first-page");
+            BackRollbackPage secondPage = await container.PushAsync<BackRollbackPage>("second-page");
+            GameObject secondFocus = secondPage.transform.Find("AlternateFocus").gameObject;
+            eventSystem.SetSelectedGameObject(secondFocus);
+
+            LogAssert.Expect(LogType.Exception, new Regex("BackFailureException: BExit"));
+            Assert.That(await container.BackAsync(), Is.True);
+
+            Assert.That(container.IsBusy, Is.False);
+            Assert.That(container.StackCount, Is.EqualTo(1));
+            Assert.That(container.Current, Is.SameAs(firstPage));
+            //关闭已提交：实例销毁、句柄释放恰好一次
+            await UniTask.Yield();
+            Assert.That(secondPage == null, Is.True);
+            Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+            //前页恢复显示、交互与焦点
+            Assert.That(firstPage.IsVisible, Is.True);
+            Assert.That(firstPage.CanvasGroup.interactable, Is.True);
+            Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(GetDefaultFocusTarget(firstPage)));
         }
 
         private GameObject CreatePagePrefab(string name, FailureStage failureStage)

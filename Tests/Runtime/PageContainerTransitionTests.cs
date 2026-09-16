@@ -36,7 +36,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator PushSecondPage_EntersOnlyNewPage_BlocksPreviousInteractionAndFocusesDefaultTarget()
+        public IEnumerator PushSecondPage_CommitsWithoutWaitingEnter_HidesPreviousInstantly()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -61,6 +61,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 await UniTask.Yield();
 
+                //加载期间前页保持显示但阻断输入
                 Assert.That(firstPage.IsVisible, Is.True);
                 Assert.That(firstPage.gameObject.activeSelf, Is.True);
                 Assert.That(firstPage.CanvasGroup.interactable, Is.False);
@@ -68,25 +69,22 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(firstPage.ExitCount, Is.Zero);
 
                 loader.CompleteSecondPage();
-                await UniTask.Yield();
-                TransitionPage[] childPages = container.GetComponentsInChildren<TransitionPage>(true);
-                TransitionPage enteringPage = Array.Find(childPages, candidate => candidate != firstPage);
-                Assert.That(enteringPage, Is.Not.Null);
-                Assert.That(firstPage.IsVisible, Is.True);
-                Assert.That(firstPage.gameObject.activeSelf, Is.True);
-                Assert.That(enteringPage.IsVisible, Is.True);
-                Assert.That(enteringPage.CanvasGroup.interactable, Is.False);
-                Assert.That(enteringPage.CanvasGroup.blocksRaycasts, Is.False);
-
-                enteringPage.CompleteEnter();
+                //新契约：Push 只等加载+Prepare+逻辑提交，入场过渡被挂起也不阻塞返回
                 TransitionPage secondPage = await secondPush;
 
                 Assert.That(secondPage, Is.Not.Null);
                 Assert.That(secondPage.EnterCount, Is.EqualTo(1));
                 Assert.That(secondPage.ExitCount, Is.Zero);
+                //前页在新页逻辑显示的同一刻即时隐藏（Push 方向露底由 Demo 复核确认）
                 Assert.That(firstPage.IsVisible, Is.False);
+                Assert.That(firstPage.gameObject.activeSelf, Is.False);
+                Assert.That(container.IsBusy, Is.False);
+                //D1：输入与焦点随状态立即启用，动画播放期间即可交互
                 Assert.That(secondPage.CanvasGroup.interactable, Is.True);
                 Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(GetDefaultFocusTarget(secondPage)));
+
+                secondPage.CompleteEnter();
+                await UniTask.Yield();
             });
         }
 
@@ -111,8 +109,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 Assert.That(transition.EnterCount, Is.EqualTo(1));
 
-                typeof(Panel).GetMethod("CloseInternal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(container, null);
-                Assert.That(transition.ExitCount, Is.Zero);
+                container.Close();
+                //新契约：面板 Close 内部触发退场过渡（fire-and-forget）
+                Assert.That(transition.ExitCount, Is.EqualTo(1));
             });
         }
 

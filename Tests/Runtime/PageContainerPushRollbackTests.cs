@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -40,9 +41,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Push_WhenEnterThrows_RestoresPreviousPageAndPropagatesOriginalException()
+        public IEnumerator Push_WhenEnterThrows_CommitsAndLeavesErrorToTransitionComponent()
         {
-            return UniTask.ToCoroutine(() => RunPushRollbackTest(FailureStage.Enter));
+            return UniTask.ToCoroutine(() => RunEnterFailureTest());
         }
 
         private async UniTask RunPushRollbackTest(FailureStage failureStage)
@@ -99,16 +100,49 @@ namespace Mochi.Unity.Preview.GUI.Tests
             switch (failureStage)
             {
                 case FailureStage.OnOpen:
-                    //新契约：失败收尾统一执行 HideInternal→CloseInternal（调用方不再按 IsOpen 分散判断），
-                    //OnOpen 未完成也会补做一次 OnClose 清理
-                    return new[] { "OnPrepare", "OnOpen", "OnClose" };
+                    //失败收尾统一执行 Close：OnOpen 未完成也会补做一次 OnClose 清理，
+                    //Close 的退场过渡随之触发（fire-and-forget）
+                    return new[] { "OnPrepare", "OnOpen", "OnClose", "Exit" };
                 case FailureStage.OnShow:
-                    return new[] { "OnPrepare", "OnOpen", "OnShow", "OnClose" };
-                case FailureStage.Enter:
-                    return new[] { "OnPrepare", "OnOpen", "OnShow", "Enter", "OnHide", "OnClose" };
+                    return new[] { "OnPrepare", "OnOpen", "OnShow", "OnClose", "Exit" };
                 default:
                     throw new ArgumentOutOfRangeException(nameof(failureStage), failureStage, null);
             }
+        }
+
+        //新契约：入场过渡 fire-and-forget，Enter 抛错归组件——Push 照常提交，
+        //错误经 UniTask 未观察通道记录日志，不影响导航状态
+        private async UniTask RunEnterFailureTest()
+        {
+            GameObject eventSystemObject = Track(new GameObject("EventSystem"));
+            EventSystem eventSystem = eventSystemObject.AddComponent<EventSystem>();
+
+            GameObject containerObject = Track(new GameObject("PageContainer"));
+            PageContainer container = containerObject.AddComponent<PageContainer>();
+
+            GameObject firstPrefab = Track(CreatePagePrefab("FirstPagePrefab", FailureStage.None));
+            GameObject failingPrefab = Track(CreatePagePrefab("FailingPagePrefab", FailureStage.Enter));
+            RollbackPanelLoader loader = new RollbackPanelLoader(firstPrefab, failingPrefab);
+            container.Initialize(loader);
+
+            ThrowingPage firstPage = await container.PushAsync<ThrowingPage>("first-page");
+
+            LogAssert.Expect(LogType.Exception, new Regex("PushFailureException: Enter"));
+            ThrowingPage failedPage = await container.PushAsync<ThrowingPage>("failing-page");
+
+            Assert.That(failedPage, Is.Not.Null);
+            Assert.That(container.IsBusy, Is.False);
+            Assert.That(container.StackCount, Is.EqualTo(2));
+            Assert.That(container.Current, Is.SameAs(failedPage));
+            //前页即时隐藏、失败页提交显示并接管焦点（D1）
+            Assert.That(firstPage.IsVisible, Is.False);
+            Assert.That(failedPage.IsVisible, Is.True);
+            Assert.That(failedPage.CanvasGroup.interactable, Is.True);
+            Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(failedPage.DefaultFocusTarget));
+            //失败页未回滚：无额外释放
+            Assert.That(loader.ReleaseCount, Is.EqualTo(0));
+
+            await UniTask.Yield();
         }
 
         private GameObject CreatePagePrefab(string name, FailureStage failureStage)

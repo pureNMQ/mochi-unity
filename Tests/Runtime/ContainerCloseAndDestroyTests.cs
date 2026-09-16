@@ -41,9 +41,10 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 await container.PushAsync<RecordingPage>("first");
                 await container.PushAsync<RecordingPage>("second");
 
-                InvokeCloseInternal(container);
+                InvokeClose(container);
 
-                //正常 Close：清空栈并恰好释放一次，容器本身继续可用
+                //正常 Close：清空栈并恰好释放一次，容器本身继续可用；等一帧确保延迟销毁生效
+                await UniTask.Yield();
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
                 RecordingPage repushed = await container.PushAsync<RecordingPage>("first");
@@ -56,7 +57,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(loader.LoadCount, Is.EqualTo(3));
                 //释放恰好：Close 释放 second、first，销毁清栈只处理重新入栈的 first，无重复释放
                 Assert.That(loader.ReleaseCount, Is.EqualTo(3));
-                Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { secondPrefab, firstPrefab, firstPrefab }));
+                Assert.That(loader.ReleasedPrefabs, Is.EquivalentTo(new[] { secondPrefab, firstPrefab, firstPrefab }));
             });
         }
 
@@ -75,7 +76,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     "first",
                     new ModalResultCallback<string>((hasResult, result) => notifications.Add(hasResult + ":" + result)));
 
-                InvokeCloseInternal(container);
+                InvokeClose(container);
 
                 //正常 Close：无结果通知在清理完成且 Busy 解除后交付，Backdrop 复位
                 Assert.That(container.StackCount, Is.Zero);
@@ -112,8 +113,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 //F4 时序：销毁入口最先标记 IsDisposed，清栈回调里的重入导航被立即拒绝
                 Assert.That(await page.ReentrantPush, Is.Null);
                 Assert.That(await page.ReentrantBack, Is.False);
-                //被拒绝的重入 Push 无副作用：未触发加载，原条目恰好释放一次
+                //被拒绝的重入 Push 无副作用：未触发加载；等一帧确保延迟销毁生效
                 Assert.That(loader.LoadCount, Is.EqualTo(1));
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 Assert.That(container.StackCount, Is.Zero);
             });
@@ -140,15 +142,17 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 //清栈回调里的重入导航被拒绝
                 Assert.That(await modal.ReentrantPush, Is.Null);
                 Assert.That(await modal.ReentrantBack, Is.False);
+                //被拒绝的重入 Push 无副作用：未触发加载；等一帧确保延迟销毁生效
                 Assert.That(loader.LoadCount, Is.EqualTo(1));
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
-                //重入发生在 CloseInternal 内，通知登记先于它执行且只交付一次
+                //重入发生在 Close 内，通知登记先于它执行且只交付一次
                 Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
             });
         }
 
         [UnityTest]
-        public IEnumerator Destroy_WhileBackAwaitingExit_TakesOverStackWithoutDoubleRelease()
+        public IEnumerator Destroy_WhileBackExitPending_ReleasesExactlyOncePerEntry()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -161,29 +165,17 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 RecordingPage firstPage = await container.PushAsync<RecordingPage>("first");
                 GatedExitPage secondPage = await container.PushAsync<GatedExitPage>("second");
 
-                //Back 挂起于退出过渡：只引用当前条目，所有权未转移
-                UniTask<bool> backTask = container.BackAsync();
-                await UniTask.Yield();
-                Assert.That(container.IsBusy, Is.True);
+                //新契约：Back 同步完成，条目已移出栈；退场动画被门控挂起，实例延迟自毁
+                Assert.That(await container.BackAsync(), Is.True);
+                Assert.That(container.IsBusy, Is.False);
+                Assert.That(container.StackCount, Is.EqualTo(1));
 
-                //销毁先至：接管整栈，全部条目由销毁清栈释放
+                //销毁强杀：剩余条目由清栈释放；已脱离栈的门控实例随父级销毁，
+                //退场等待被销毁令牌取消，句柄由 OnDestroy 兜底释放——每条目恰好一次
                 UnityEngine.Object.DestroyImmediate(container.gameObject);
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
-                Assert.That(loader.ReleasedPrefabs, Is.EqualTo(new[] { secondPrefab, firstPrefab }));
-
-                //Back 异步收尾看到 IsDisposed 后跳过条目清理，以取消异常结束，不重复释放
-                Exception caught = null;
-                try
-                {
-                    await backTask;
-                }
-                catch (Exception exception)
-                {
-                    caught = exception;
-                }
-
-                Assert.That(caught, Is.TypeOf<OperationCanceledException>());
-                Assert.That(loader.ReleaseCount, Is.EqualTo(2));
+                Assert.That(loader.ReleasedPrefabs, Is.EquivalentTo(new[] { firstPrefab, secondPrefab }));
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(firstPage == null, Is.True);
                 Assert.That(secondPage == null, Is.True);
@@ -204,8 +196,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 await container.PushAsync<RecordingPage>("first");
                 await container.PushAsync<RecordingPage>("second");
 
-                //Back 先至：同步收尾先把条目移出栈并释放，所有权不再属于栈
+                //Back 先至：同步收尾先把条目移出栈并销毁（所有权转移），释放随帧末自释放完成
                 Assert.That(await container.BackAsync(), Is.True);
+                await UniTask.Yield();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 Assert.That(container.StackCount, Is.EqualTo(1));
 
@@ -219,7 +212,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Page_CloseWhileBackInFlight_TakesOverImmediately()
+        public IEnumerator Page_CloseWhileBackExitPending_CompletesBackThenClearsRemainder()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -232,91 +225,74 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 RecordingPage firstPage = await container.PushAsync<RecordingPage>("first");
                 GatedExitPage secondPage = await container.PushAsync<GatedExitPage>("second");
 
-                UniTask<bool> backTask = container.BackAsync();
-                await UniTask.Yield();
-                Assert.That(container.IsBusy, Is.True);
+                //新契约：Back 同步完成，退场动画被门控挂起（实例延迟自毁），不再有 Busy 窗口
+                Assert.That(await container.BackAsync(), Is.True);
+                Assert.That(container.StackCount, Is.EqualTo(1));
+                Assert.That(container.IsBusy, Is.False);
 
-                //父容器关闭路径经由 CloseInternal 触发子容器 OnClose；Busy 时立即接管，不排队/挂起
-                InvokeCloseInternal(container);
+                //容器 Close 清空剩余条目并复位；已脱离栈的门控实例不重复处理
+                InvokeClose(container);
 
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(container.IsBusy, Is.False);
-                Assert.That(loader.ReleaseCount, Is.EqualTo(2));
-                //接管后容器不可用：新导航被拒绝且无副作用
-                Assert.That(await container.PushAsync<RecordingPage>("first"), Is.Null);
-                Assert.That(await container.BackAsync(), Is.False);
-                Assert.That(loader.LoadCount, Is.EqualTo(2));
+                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+                //正常 Close 后容器本身继续可用：新 Push 正常受理
+                RecordingPage repushed = await container.PushAsync<RecordingPage>("first");
+                Assert.That(repushed, Is.Not.Null);
+                Assert.That(loader.LoadCount, Is.EqualTo(3));
 
-                //在途 Back 收尾看到不可用状态后跳过条目清理，以取消异常结束
-                Exception caught = null;
-                try
-                {
-                    await backTask;
-                }
-                catch (Exception exception)
-                {
-                    caught = exception;
-                }
-
-                Assert.That(caught, Is.TypeOf<OperationCanceledException>());
-                Assert.That(loader.ReleaseCount, Is.EqualTo(2));
+                //释放门控：延迟自毁完成收尾，已移出条目恰好释放一次
+                secondPage.ReleaseExit();
                 await UniTask.Yield();
-                Assert.That(firstPage == null, Is.True);
+                Assert.That(loader.ReleaseCount, Is.EqualTo(2));
                 Assert.That(secondPage == null, Is.True);
             });
         }
 
         [UnityTest]
-        public IEnumerator Modal_CloseWhileBackInFlight_TakesOverImmediatelyAndNotifiesOnce()
+        public IEnumerator Modal_CloseWhileBackExitPending_CompletesBackThenClearsRemainder()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 ModalContainer container = Track(new GameObject("ModalContainer")).AddComponent<ModalContainer>();
-                GameObject prefab = Track(CreateModalPrefab<GatedExitModal>("ModalPrefab"));
-                KeyedLoader loader = new KeyedLoader(prefab);
+                GameObject firstPrefab = Track(CreateModalPrefab<GatedExitModal>("FirstModalPrefab"));
+                GameObject secondPrefab = Track(CreateModalPrefab<RecordingModal>("SecondModalPrefab"));
+                KeyedLoader loader = new KeyedLoader(firstPrefab, secondPrefab);
                 container.Initialize(loader);
 
                 List<string> notifications = new List<string>();
-                GatedExitModal modal = await container.PushAsync<GatedExitModal, string>(
+                GatedExitModal firstModal = await container.PushAsync<GatedExitModal, string>(
                     "first",
                     new ModalResultCallback<string>((hasResult, result) => notifications.Add(hasResult + ":" + result)));
+                RecordingModal secondModal = await container.PushAsync<RecordingModal, string>(
+                    "second",
+                    new ModalResultCallback<string>((hasResult, result) => notifications.Add(hasResult + ":" + result)));
 
-                UniTask<bool> backTask = container.BackAsync();
-                await UniTask.Yield();
-                Assert.That(container.IsBusy, Is.True);
+                //新契约：Back 同步完成并按条目交付通知（不等退场动画与延迟销毁）
+                Assert.That(await container.BackAsync(), Is.True);
+                Assert.That(container.StackCount, Is.EqualTo(1));
+                Assert.That(container.IsBusy, Is.False);
+                Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
 
-                //Busy 时关闭立即接管：清栈释放、复位 Backdrop、清理完成后交付通知（恰好一次）
-                InvokeCloseInternal(container);
+                //容器 Close 清空剩余条目并复位 Backdrop，通知在清理后交付（恰好一次）
+                InvokeClose(container);
 
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(container.IsBusy, Is.False);
-                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
-                Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
+                Assert.That(notifications, Is.EqualTo(new[] { "False:", "False:" }));
                 Assert.That(container.transform.Find("ModalBackdrop").GetComponent<CanvasGroup>().alpha, Is.EqualTo(0f));
 
-                Exception caught = null;
-                try
-                {
-                    await backTask;
-                }
-                catch (Exception exception)
-                {
-                    caught = exception;
-                }
-
-                //在途 Back 收尾跳过登记与清理：通知不重复、资源不重复释放
-                Assert.That(caught, Is.TypeOf<OperationCanceledException>());
-                Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
-                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+                //释放门控：延迟自毁完成收尾，两条目各自恰好释放一次
+                firstModal.ReleaseExit();
+                await UniTask.Yield();
+                Assert.That(loader.ReleaseCount, Is.EqualTo(2));
                 Assert.That(await container.BackAsync(), Is.False);
             });
         }
 
-        private static void InvokeCloseInternal(Panel container)
+        private static void InvokeClose(Panel container)
         {
-            typeof(Panel)
-                .GetMethod("CloseInternal", BindingFlags.Instance | BindingFlags.NonPublic)
-                .Invoke(container, null);
+            container.Close();
         }
 
         private GameObject CreatePagePrefab<TPage>(string name) where TPage : Panel
@@ -428,10 +404,15 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 return UniTask.CompletedTask;
             }
 
-            //退出过渡挂起在门控上，用于构造 Back 在途与销毁/关闭竞争
+            //退出过渡挂起在门控上，用于构造退场动画未完的延迟自毁窗口
             public UniTask ExitAsync(CancellationToken cancellationToken)
             {
                 return gate.Task.AttachExternalCancellation(cancellationToken);
+            }
+
+            public void ReleaseExit()
+            {
+                gate.TrySetResult(true);
             }
         }
 
@@ -447,6 +428,11 @@ namespace Mochi.Unity.Preview.GUI.Tests
             public UniTask ExitAsync(CancellationToken cancellationToken)
             {
                 return gate.Task.AttachExternalCancellation(cancellationToken);
+            }
+
+            public void ReleaseExit()
+            {
+                gate.TrySetResult(true);
             }
         }
     }

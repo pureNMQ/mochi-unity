@@ -9,14 +9,27 @@ namespace Mochi.Unity.Preview.GUI
         private const string CanvasObjectName = "Canvas";
         private const string PageContainerObjectName = "PageContainer";
         private const string ModalContainerObjectName = "ModalContainer";
+        private const string HudLayerObjectName = "HUDLayer";
+        private const string NotificationLayerObjectName = "NotificationLayer";
 
         private static GUINavigator instance;
+        private GameObject canvasObject;
         private PageContainer pages;
         private ModalContainer modals;
+        private OverlayContainer hud;
+        private OverlayContainer notifications;
+        private IPanelLoader rootLoader;
+        //仅在 Awake/Initialize 建立过根 Layer 的导航器才启用属性重建；重复导航器保持 null
+        private bool rootsCreated;
 
         public static GUINavigator Instance => instance;
-        public PageContainer Pages => pages;
-        public ModalContainer Modals => modals;
+
+        //根 Layer 被销毁时按需自动重建（沿用最近一次 Initialize 的 Loader），允许外部直接调用方法
+        public PageContainer Pages => EnsureLayer(ref pages, PageContainerObjectName, 0);
+        public ModalContainer Modals => EnsureLayer(ref modals, ModalContainerObjectName, 1);
+        public OverlayContainer HUD => EnsureLayer(ref hud, HudLayerObjectName, 2);
+        public OverlayContainer Notifications =>
+            EnsureLayer(ref notifications, NotificationLayerObjectName, 3);
 
         private void Awake()
         {
@@ -32,68 +45,101 @@ namespace Mochi.Unity.Preview.GUI
 
         public void Initialize(IPanelLoader loader)
         {
-            //C1 核对说明：根容器（Pages/Modals）Initialize 成功即处于逻辑显示状态——
-            //容器级视觉跳过标志默认复位、首个 Push 正常执行 OnShow 与入场过渡，业务无需额外 Show 调用；
-            //整树隐藏/恢复使用容器级 Hide/ShowAsync（经 Internal 入口向所管理 Panel 幂等传播）。
+            //根容器 Initialize 成功即处于逻辑显示状态：首个 Push/Open 正常带视觉；
+            //整树隐藏/恢复使用容器级 Hide/ShowAsync（向所管理 Panel 幂等传播）
+            rootLoader = loader;
             EnsureRuntimeRoots();
-            pages.Initialize(loader);
-            modals.Initialize(loader);
+            InitializeLayer(pages, loader);
+            InitializeLayer(modals, loader);
+            InitializeLayer(hud, loader);
+            InitializeLayer(notifications, loader);
         }
 
         private void EnsureRuntimeRoots()
         {
-            if (pages != null)
+            if (rootsCreated)
             {
                 return;
             }
 
-            GameObject canvasObject = new GameObject(
+            canvasObject = CreateCanvasRoot();
+            pages = CreateRootContainer<PageContainer>(canvasObject.transform, PageContainerObjectName);
+            modals = CreateRootContainer<ModalContainer>(canvasObject.transform, ModalContainerObjectName);
+            hud = CreateRootContainer<OverlayContainer>(canvasObject.transform, HudLayerObjectName);
+            notifications = CreateRootContainer<OverlayContainer>(
+                canvasObject.transform, NotificationLayerObjectName);
+            rootsCreated = true;
+        }
+
+        //根 Layer 存活检查与自动重建：销毁后以原名重建、回到原排序位，
+        //已 Initialize 过的导航器沿用既有 Loader 完成初始化；未建立过根 Layer 的导航器不惰性建层
+        private TContainer EnsureLayer<TContainer>(ref TContainer field, string objectName, int siblingIndex)
+            where TContainer : PanelContainer
+        {
+            if (field == null && rootsCreated)
+            {
+                field = CreateRootContainer<TContainer>(EnsureCanvasRoot(), objectName);
+                field.transform.SetSiblingIndex(siblingIndex);
+                InitializeLayer(field, rootLoader);
+            }
+
+            return field;
+        }
+
+        private void InitializeLayer(PanelContainer container, IPanelLoader loader)
+        {
+            if (container != null && loader != null && !container.IsInitialized)
+            {
+                container.Initialize(loader);
+            }
+        }
+
+        private Transform EnsureCanvasRoot()
+        {
+            if (canvasObject == null)
+            {
+                canvasObject = CreateCanvasRoot();
+            }
+
+            return canvasObject.transform;
+        }
+
+        private GameObject CreateCanvasRoot()
+        {
+            GameObject canvasRoot = new GameObject(
                 CanvasObjectName,
                 typeof(RectTransform),
                 typeof(Canvas),
                 typeof(CanvasScaler),
                 typeof(GraphicRaycaster));
-            canvasObject.transform.SetParent(transform, false);
+            canvasRoot.transform.SetParent(transform, false);
 
-            Canvas canvas = canvasObject.GetComponent<Canvas>();
+            Canvas canvas = canvasRoot.GetComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = 0;
 
-            CanvasScaler scaler = canvasObject.GetComponent<CanvasScaler>();
+            CanvasScaler scaler = canvasRoot.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920f, 1080f);
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight = 0.5f;
+            return canvasRoot;
+        }
 
-            GameObject pageContainerObject = new GameObject(
-                PageContainerObjectName,
-                typeof(RectTransform),
-                typeof(PageContainer));
-            pageContainerObject.transform.SetParent(canvasObject.transform, false);
+        private static TContainer CreateRootContainer<TContainer>(Transform parent, string objectName)
+            where TContainer : Component
+        {
+            GameObject containerObject = new GameObject(objectName, typeof(RectTransform), typeof(TContainer));
+            containerObject.transform.SetParent(parent, false);
 
-            RectTransform pageContainerRect = pageContainerObject.GetComponent<RectTransform>();
-            pageContainerRect.anchorMin = Vector2.zero;
-            pageContainerRect.anchorMax = Vector2.one;
-            pageContainerRect.offsetMin = Vector2.zero;
-            pageContainerRect.offsetMax = Vector2.zero;
-            pageContainerRect.localScale = Vector3.one;
+            RectTransform rect = containerObject.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rect.localScale = Vector3.one;
 
-            pages = pageContainerObject.GetComponent<PageContainer>();
-
-            GameObject modalContainerObject = new GameObject(
-                ModalContainerObjectName,
-                typeof(RectTransform),
-                typeof(ModalContainer));
-            modalContainerObject.transform.SetParent(canvasObject.transform, false);
-
-            RectTransform modalContainerRect = modalContainerObject.GetComponent<RectTransform>();
-            modalContainerRect.anchorMin = Vector2.zero;
-            modalContainerRect.anchorMax = Vector2.one;
-            modalContainerRect.offsetMin = Vector2.zero;
-            modalContainerRect.offsetMax = Vector2.zero;
-            modalContainerRect.localScale = Vector3.one;
-
-            modals = modalContainerObject.GetComponent<ModalContainer>();
+            return containerObject.GetComponent<TContainer>();
         }
 
         private void OnDestroy()
