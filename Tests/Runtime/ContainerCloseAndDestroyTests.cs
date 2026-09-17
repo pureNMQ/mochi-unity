@@ -10,8 +10,8 @@ using UnityEngine.TestTools;
 
 namespace Mochi.Unity.Preview.GUI.Tests
 {
-    //R4/F4 新契约用例：共用清栈与销毁/关闭接管——
-    //正常 Close 后销毁=空操作、销毁中重入被拒、Back 与销毁竞争不重复 Release、Busy 关闭立即接管
+    //容器终结契约：Close 清栈并自毁、Clear 清栈保留容器、销毁中重入被拒、
+    //Back 与销毁竞争不重复 Release、Busy 关闭立即接管
     public class ContainerCloseAndDestroyTests
     {
         private readonly List<GameObject> objectsToDestroy = new List<GameObject>();
@@ -28,7 +28,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Page_CloseThenDestroy_ReleasesOnceAndContainerReusableAfterClose()
+        public IEnumerator Page_ClearThenDestroy_ReleasesOnceAndContainerReusableAfterClear()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -41,16 +41,16 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 await container.PushAsync<RecordingPage>("first");
                 await container.PushAsync<RecordingPage>("second");
 
-                InvokeClose(container);
+                container.Clear();
 
-                //正常 Close：清空栈并恰好释放一次，容器本身继续可用；等一帧确保延迟销毁生效
+                //Clear 清空栈并恰好释放一次，容器保留可复用
                 await UniTask.Yield();
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(2));
                 RecordingPage repushed = await container.PushAsync<RecordingPage>("first");
                 Assert.That(repushed, Is.Not.Null);
 
-                //正常 Close 不标记 IsDisposed：关闭后再销毁仍执行完整时序，但清栈只处理重新入栈的条目
+                //销毁仅处理重新入栈的条目，无重复释放
                 UnityEngine.Object.DestroyImmediate(container.gameObject);
                 await UniTask.Yield();
 
@@ -62,7 +62,29 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Modal_CloseThenDestroy_NotifiesOnceReleasesOnceAndResetsBackdrop()
+        public IEnumerator Page_Close_ClearsStackAndDestroysContainer()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                PageContainer container = Track(new GameObject("PageContainer")).AddComponent<PageContainer>();
+                GameObject prefab = Track(CreatePagePrefab<RecordingPage>("FirstPrefab"));
+                KeyedLoader loader = new KeyedLoader(prefab);
+                container.Initialize(loader);
+
+                await container.PushAsync<RecordingPage>("first");
+
+                InvokeClose(container);
+
+                //Close 语义统一为终结：清栈释放后容器随帧末自毁
+                Assert.That(container.StackCount, Is.Zero);
+                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+                await UniTask.Yield();
+                Assert.That(container == null, Is.True);
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator Modal_Close_ClearsNotifiesOnceAndDestroysContainer()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -85,10 +107,9 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 Assert.That(container.transform.Find("ModalBackdrop").GetComponent<CanvasGroup>().alpha, Is.EqualTo(0f));
 
-                UnityEngine.Object.DestroyImmediate(container.gameObject);
+                //容器随 Close 自毁：通知与释放不重复
                 await UniTask.Yield();
-
-                //销毁清栈为空操作：通知不重复、Release 不重复
+                Assert.That(container == null, Is.True);
                 Assert.That(notifications, Is.EqualTo(new[] { "False:" }));
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 Assert.That(loader.LoadCount, Is.EqualTo(1));
@@ -212,7 +233,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Page_CloseWhileBackExitPending_CompletesBackThenClearsRemainder()
+        public IEnumerator Page_ClearWhileBackExitPending_CompletesBackThenClearsRemainder()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -230,13 +251,13 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(container.StackCount, Is.EqualTo(1));
                 Assert.That(container.IsBusy, Is.False);
 
-                //容器 Close 清空剩余条目并复位；已脱离栈的门控实例不重复处理
-                InvokeClose(container);
+                //Clear 清空剩余条目；已脱离栈的门控实例不重复处理
+                container.Clear();
 
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(container.IsBusy, Is.False);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
-                //正常 Close 后容器本身继续可用：新 Push 正常受理
+                //容器保留可复用：新 Push 正常受理
                 RecordingPage repushed = await container.PushAsync<RecordingPage>("first");
                 Assert.That(repushed, Is.Not.Null);
                 Assert.That(loader.LoadCount, Is.EqualTo(3));

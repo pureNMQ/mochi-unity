@@ -95,7 +95,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Page_SelfCloseDuringHiddenPeriod_KeepsEntryHidden()
+        public IEnumerator Page_SelfCloseDuringHiddenPeriod_RestoresNewTopLogically()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -104,22 +104,22 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("first", CreatePrefab("FirstPrefab"));
                 loader.Register("second", CreatePrefab("SecondPrefab"));
                 container.Initialize(loader);
+                container.Show();
 
                 PlainPage first = await container.PushAsync<PlainPage>("first");
                 container.Hide();
                 PlainPage second = await container.PushAsync<PlainPage>("second");
 
-                //隐藏期自行关闭：条目抽出，不恢复新顶显示（隐藏期无视觉），逻辑保持一致
+                //隐藏期自行关闭：条目抽出，新顶恢复逻辑显示（视觉随容器整树）
                 second.Close();
 
                 Assert.That(container.StackCount, Is.EqualTo(1));
-                Assert.That(first.IsVisible, Is.False);
-                Assert.That(first.CanvasGroup.interactable, Is.False);
-
-                //恢复显示按最终栈呈现
-                await container.ShowAsync();
                 Assert.That(first.IsVisible, Is.True);
                 Assert.That(first.CanvasGroup.interactable, Is.True);
+
+                container.Show();
+                Assert.That(first.IsVisible, Is.True);
+                Assert.That(first.gameObject.activeInHierarchy, Is.True);
             });
         }
 

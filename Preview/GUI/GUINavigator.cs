@@ -66,6 +66,12 @@ namespace Mochi.Unity.Preview.GUI
             modals = CreateRootContainer<ModalContainer>(canvasObject.transform, ModalContainerObjectName);
             notifications = CreateRootContainer<OverlayContainer>(
                 canvasObject.transform, NotificationLayerObjectName);
+
+            //根 Layer 创建即逻辑显示，首个导航带视觉
+            hud.Show();
+            pages.Show();
+            modals.Show();
+            notifications.Show();
             rootsCreated = true;
         }
 
@@ -78,6 +84,7 @@ namespace Mochi.Unity.Preview.GUI
                 field = CreateRootContainer<TContainer>(EnsureCanvasRoot(), objectName);
                 field.transform.SetSiblingIndex(siblingIndex);
                 InitializeLayer(field, rootLoader);
+                field.Show();
             }
 
             return field;

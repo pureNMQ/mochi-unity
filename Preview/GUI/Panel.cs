@@ -36,16 +36,15 @@ namespace Mochi.Unity.Preview.GUI
 
         private CanvasGroup canvasGroup;
         private GameObject savedFocusTarget;
-        //关闭中状态：Close 已受理、收尾流程在途，Show/Hide/Close 重入一律拒绝
         private bool closing;
-        //工厂注入的 Prefab 句柄与释放入口；未注入（直接构造）保持 null
         private IPanelLoader prefabLoader;
         private GameObject prefabHandle;
+        private CancellationTokenSource transitionCancellation;
 
         /// <summary>
         /// 设置面板是否可交互
         /// </summary>
-        /// <param name="enabled">是否可交互</param>
+        /// <param name="enabled"></param>
         public void SetInteractable(bool enabled)
         {
 
@@ -66,7 +65,7 @@ namespace Mochi.Unity.Preview.GUI
         /// <summary>
         /// 设置焦点到指定的UI元素
         /// </summary>
-        /// <param name="focusTarget">要设置焦点的UI元素</param>
+        /// <param name="focusTarget"></param>
         public void Focus(GameObject focusTarget)
         {
             if (focusTarget != null && EventSystem.current != null)
@@ -92,8 +91,9 @@ namespace Mochi.Unity.Preview.GUI
             closing = false;
         }
 
-        //公开同步显示：执行即提交可见状态，输入与焦点随状态立即启用，
-        //入场过渡由 Panel 检测组件后 fire-and-forget，调用方不等待动画
+        /// <summary>
+        /// 显示面板，若已显示则不执行任何操作
+        /// </summary>
         public void Show()
         {
             if (closing || IsVisible)
@@ -101,17 +101,34 @@ namespace Mochi.Unity.Preview.GUI
                 return;
             }
 
+            ShowCore();
+            FireTransitionAsync(true).Forget();
+        }
+
+        /// <summary>显示面板，不播放过渡动画</summary>
+        public void ShowImmediate()
+        {
+            if (closing || IsVisible)
+            {
+                return;
+            }
+
+            ShowCore();
+        }
+
+        private void ShowCore()
+        {
             gameObject.SetActive(true);
-            OnShow();
             IsVisible = true;
             SetInteractable(true);
             RestoreFocusInternal();
+            OnShow();
             Shown?.Invoke(this);
-            FireTransitionAsync(enter: true).Forget();
         }
 
-        //公开同步隐藏：执行即提交隐藏状态并立即停用实例（视觉即时消失），
-        //退场过渡 fire-and-forget 由组件在失活实例上自行追赶
+        /// <summary>
+        /// 隐藏面板，若已隐藏则不执行任何操作
+        /// </summary>
         public virtual void Hide()
         {
             if (closing || !IsVisible)
@@ -119,16 +136,34 @@ namespace Mochi.Unity.Preview.GUI
                 return;
             }
 
-            SaveFocusInternal();
-            OnHide();
-            gameObject.SetActive(false);
-            IsVisible = false;
-            Hidden?.Invoke(this);
-            FireTransitionAsync(enter: false).Forget();
+            HideCore();
+            FireTransitionAsync(false).Forget();
         }
 
-        //公开同步关闭：逻辑立即关闭并进入 closing 拒绝重入；关闭决策不可逆，
-        //生命周期回调抛错不阻断状态提交、Closed 通知与自毁调度（finally 保证）
+        /// <summary>隐藏面板，不播放过渡动画</summary>
+        public void HideImmediate()
+        {
+            if (closing || !IsVisible)
+            {
+                return;
+            }
+
+            HideCore();
+            gameObject.SetActive(false);
+        }
+
+        private void HideCore()
+        {
+            SaveFocusInternal();
+            OnHide();
+            IsVisible = false;
+            SetInteractable(false);
+            Hidden?.Invoke(this);
+        }
+
+        /// <summary>
+        /// 关闭面板，播放退场过渡后释放并销毁实例
+        /// </summary>
         public void Close()
         {
             if (closing)
@@ -141,14 +176,10 @@ namespace Mochi.Unity.Preview.GUI
             {
                 if (IsVisible)
                 {
-                    SaveFocusInternal();
-                    OnHide();
-                    IsVisible = false;
-                    Hidden?.Invoke(this);
-                    //不立即停用：退场动画需在存活实例上播放，视觉延后追赶逻辑状态
+                    //不立即停用：退场动画需在存活实例上播放
+                    HideCore();
                 }
 
-                SetInteractable(false);
                 OnClose();
             }
             finally
@@ -159,9 +190,33 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        //关闭后的实例处置：工厂创建的 Prefab 面板播完退场动画自毁；
-        //运行时容器由持有方管理存活（关闭仅做逻辑收尾），覆写为 false
-        protected virtual bool DestroySelfOnClose => true;
+        /// <summary>关闭面板，不播退场过渡，立即释放并销毁实例</summary>
+        public void CloseImmediate()
+        {
+            if (closing)
+            {
+                return;
+            }
+
+            closing = true;
+            try
+            {
+                if (IsVisible)
+                {
+                    HideCore();
+                }
+
+                OnClose();
+            }
+            finally
+            {
+                IsOpen = false;
+                Closed?.Invoke(this);
+                CancelTransition();
+                ReleasePrefabHandleImmediate();
+                Destroy(gameObject);
+            }
+        }
 
         internal void BindPrefabHandle(IPanelLoader loader, GameObject prefab)
         {
@@ -186,6 +241,7 @@ namespace Mochi.Unity.Preview.GUI
 
         protected virtual void OnDestroy()
         {
+            CancelTransition();
             ReleasePrefabHandleImmediate();
         }
 
@@ -207,36 +263,43 @@ namespace Mochi.Unity.Preview.GUI
             Focus(savedFocusTarget ?? defaultFocusTarget);
         }
 
-        //过渡检测与触发归 Panel 内部：fire-and-forget，容器不感知、不等待
         private async UniTaskVoid FireTransitionAsync(bool enter)
         {
             IPanelTransition transition = GetComponent<IPanelTransition>();
             if (transition == null)
             {
+                if (!enter)
+                {
+                    gameObject.SetActive(false);
+                }
+
                 return;
             }
 
+            CancellationToken token = BeginTransition();
             try
             {
                 if (enter)
                 {
-                    await transition.EnterAsync(destroyCancellationToken);
+                    await transition.EnterAsync(token);
                 }
                 else
                 {
-                    await transition.ExitAsync(destroyCancellationToken);
+                    await transition.ExitAsync(token);
+                    //退场完成强制停用，停用权归 Panel 而非过渡实现
+                    gameObject.SetActive(false);
                 }
             }
             catch (OperationCanceledException)
             {
-                //实例销毁取消过渡：视觉无需继续追赶
+                //过渡被新过渡取代或实例销毁：取消方接管视觉收尾
             }
         }
 
-        //关闭收尾：等待退场动画播完再释放句柄并按配置自毁，自毁不因过渡错误中断；
-        //外部强杀先行时由 OnDestroy 兜底释放；过渡错误在处置完成后原样上抛（归组件观察）
         private async UniTaskVoid FinishCloseAfterExitAsync()
         {
+            //关闭退场先行接管视觉，取消 Close 前仍在途的过渡
+            CancelTransition();
             Exception exitError = null;
             IPanelTransition transition = GetComponent<IPanelTransition>();
             if (transition != null)
@@ -262,15 +325,28 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             ReleasePrefabHandleImmediate();
-            if (DestroySelfOnClose)
-            {
-                Destroy(gameObject);
-            }
+            Destroy(gameObject);
 
             if (exitError != null)
             {
                 throw exitError;
             }
+        }
+
+        //同一时刻至多一个在途过渡，新过渡取消旧过渡
+        private CancellationToken BeginTransition()
+        {
+            transitionCancellation?.Cancel();
+            transitionCancellation?.Dispose();
+            transitionCancellation = new CancellationTokenSource();
+            return transitionCancellation.Token;
+        }
+
+        private void CancelTransition()
+        {
+            transitionCancellation?.Cancel();
+            transitionCancellation?.Dispose();
+            transitionCancellation = null;
         }
 
         /// <summary>

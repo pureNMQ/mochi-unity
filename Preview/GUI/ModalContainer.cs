@@ -129,22 +129,13 @@ namespace Mochi.Unity.Preview.GUI
 
                 MoveBackdropBelowPanel(modal);
 
-                if (!SuppressVisuals)
+                //首个 Modal 入栈：Backdrop 淡入与入场并行
+                if (previousEntry == null)
                 {
-                    //首个 Modal 入栈：Backdrop 淡入与入场并行（均 fire-and-forget）
-                    if (previousEntry == null)
-                    {
-                        RunBackdropFadeAsync(1f);
-                    }
+                    RunBackdropFadeAsync(1f);
+                }
 
-                    //显示即提交状态、启用输入与焦点，入场过渡由 Panel fire-and-forget
-                    modal.Show();
-                }
-                else
-                {
-                    //隐藏期：不执行 OnShow 与入场，保持实例失活；交互组同步禁用，不启用输入
-                    modal.SetInteractable(false);
-                }
+                modal.Show();
 
                 AddStackEntry(modal);
                 committed = true;
@@ -167,13 +158,11 @@ namespace Mochi.Unity.Preview.GUI
         //交互与焦点、复位 Backdrop；工厂失败（modal 为 null）时资源已由工厂处理，此处只恢复前层与 Backdrop
         private void RollbackPush(ModalPanel modal, StackEntry previousEntry)
         {
-            //失败实例的收尾由 Panel Close 幂等保证安全；显式释放与销毁即时收回（不等退场动画）
+            //失败实例立即终结，不等退场动画
             if (modal != null)
             {
                 modal.Unbind();
-                modal.Close();
-                modal.ReleasePrefabHandleImmediate();
-                Destroy(modal.gameObject);
+                modal.CloseImmediate();
             }
 
             //恢复前一个 Modal 的交互；幂等 Show 不再隐式恢复焦点，改为显式焦点补偿
@@ -272,27 +261,18 @@ namespace Mochi.Unity.Preview.GUI
                 RemoveStackEntryAt(StackCount - 1);
                 try
                 {
-                    if (!SuppressVisuals)
+                    //最后一个 Modal 退出：Backdrop 随之淡出
+                    if (nextTop == null)
                     {
-                        //最后一个 Modal 退出：Backdrop 淡出与退场并行 fire-and-forget
-                        if (nextTop == null)
-                        {
-                            RunBackdropFadeAsync(0f);
-                        }
-
-                        //剩余栈顶恢复显示与输入（退场动画在其上方自行淡出，天然无缝）
-                        if (nextTop != null && nextTop.Panel != null)
-                        {
-                            nextTop.Panel.Show();
-                            nextTop.Panel.SetInteractable(true);
-                            nextTop.Panel.FocusDefaultInternal();
-                        }
+                        RunBackdropFadeAsync(0f);
                     }
-                    else if (nextTop == null)
+
+                    //剩余栈顶恢复显示与输入，退场动画在其上方自行淡出
+                    if (nextTop != null && nextTop.Panel != null)
                     {
-                        //隐藏期无视觉：Backdrop 按最终栈同步复位
-                        SetBackdropAlpha(0f);
-                        SetBackdropRaycasts(false);
+                        nextTop.Panel.Show();
+                        nextTop.Panel.SetInteractable(true);
+                        nextTop.Panel.FocusDefaultInternal();
                     }
                 }
                 finally
@@ -321,13 +301,11 @@ namespace Mochi.Unity.Preview.GUI
             return UniTask.FromResult(true);
         }
 
-        //容器显示的呈现流程：按多层展示规则恢复所需层并同步 Backdrop——
-        //全部条目执行显示（入场自行 fire-and-forget），仅栈顶层保留交互
-        protected override void PresentOnShow()
+        //容器重显时按最终栈立即呈现：全部层显示，仅栈顶层保留交互
+        protected override void OnShow()
         {
             if (StackCount == 0)
             {
-                //无 Modal：Backdrop 按最终栈复位为隐藏（状态同步，不播放淡出）
                 if (backdrop != null)
                 {
                     SetBackdropAlpha(0f);
@@ -337,7 +315,6 @@ namespace Mochi.Unity.Preview.GUI
                 return;
             }
 
-            //Backdrop 同步到当前栈顶之下
             MoveBackdropBelowPanel(GetStackEntry(StackCount - 1).Panel);
 
             for (int index = 0; index < StackCount; index++)
@@ -345,20 +322,13 @@ namespace Mochi.Unity.Preview.GUI
                 Panel layer = GetStackEntry(index).Panel;
                 if (layer != null)
                 {
-                    //隐藏期入栈的层在此执行显示；已显示层由幂等空操作
-                    layer.Show();
+                    layer.ShowImmediate();
                 }
             }
 
-            //Backdrop 同步：依最终栈恢复淡入（隐藏期跳过淡入时 alpha 可能仍为 0）或保持在场
-            if (backdropCanvasGroup.alpha < 1f)
-            {
-                RunBackdropFadeAsync(1f);
-            }
-            else
-            {
-                SetBackdropRaycasts(true);
-            }
+            //容器级呈现不重播淡入，Backdrop 直接同步到在场
+            SetBackdropAlpha(1f);
+            SetBackdropRaycasts(true);
 
             //多层展示规则：仅栈顶层可交互，其余层回收输入（Show 已统一启用）
             for (int index = 0; index < StackCount - 1; index++)
@@ -377,22 +347,37 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
+        /// <summary>清空模态栈，容器保留可用；无结果通知在清理完成后交付</summary>
+        public void Clear()
+        {
+            if (IsDisposed || IsBusy)
+            {
+                return;
+            }
+
+            ClearModalsAndReset(immediateDestroy: false);
+        }
+
         protected override void OnClose()
         {
-            //父容器关闭触发本容器 OnClose 且 Busy 时立即接管（不排队）：
-            //先标记不可用并取消在途操作，清栈由 ClearModals 与销毁共用所有权规则
+            //容器自身随 Close 销毁，Busy 操作立即接管
             if (IsBusy)
             {
                 BeginBusyTakeOver();
             }
 
-            //显式维护 Busy：清栈期间容器不接受新操作，清理完成且 Busy 解除后交付通知，容器本身继续可用
+            ClearModalsAndReset(immediateDestroy: true);
+            base.OnClose();
+        }
+
+        //通知在 Busy 解除后交付，避免回调重入容器操作
+        private void ClearModalsAndReset(bool immediateDestroy)
+        {
             IsBusy = true;
             List<Action> notifications;
             try
             {
-                notifications = ClearModals(immediateDestroy: false);
-                //Modal 额外复位 Backdrop：属于容器自身状态清理，随清栈完成、先于通知交付
+                notifications = ClearModals(immediateDestroy);
                 SetBackdropAlpha(0f);
                 SetBackdropRaycasts(false);
             }
@@ -401,13 +386,10 @@ namespace Mochi.Unity.Preview.GUI
                 IsBusy = false;
             }
 
-            //清理完成、Busy 解除后按条目交付通知；回调异常已由 InvokeSafely 隔离，不影响容器状态
             foreach (Action notification in notifications)
             {
                 notification?.Invoke();
             }
-
-            base.OnClose();
         }
 
         //共用清栈：从栈顶向下逐条目先解除关系（移出栈）、登记解绑再关闭面板；
@@ -426,14 +408,15 @@ namespace Mochi.Unity.Preview.GUI
                 notifications.Add(modal.CaptureResultNotification(false, null));
                 modal.Unbind();
 
-                //实例有效性检查：仅存活实例执行生命周期调用与销毁
                 if (entry.Panel != null)
                 {
-                    modal.Close();
                     if (immediateDestroy)
                     {
-                        modal.ReleasePrefabHandleImmediate();
-                        Destroy(entry.Panel.gameObject);
+                        modal.CloseImmediate();
+                    }
+                    else
+                    {
+                        modal.Close();
                     }
                 }
             }
@@ -461,7 +444,7 @@ namespace Mochi.Unity.Preview.GUI
                 Panel top = GetStackEntry(StackCount - 1).Panel;
                 MoveBackdropBelowPanel(top);
                 SetBackdropRaycasts(true);
-                if (!SuppressVisuals && top != null)
+                if (top != null)
                 {
                     top.Show();
                     top.SetInteractable(true);

@@ -14,10 +14,19 @@ namespace Mochi.Unity.Preview.GUI
 
         void Close();
 
+        /// <summary>显示面板，不播放过渡动画</summary>
+        void ShowImmediate();
+
+        /// <summary>隐藏面板，不播放过渡动画</summary>
+        void HideImmediate();
+
+        /// <summary>关闭面板，不播退场过渡，立即释放并销毁实例</summary>
+        void CloseImmediate();
+
         /// <summary>
         /// 设置面板是否可交互
         /// </summary>
-        /// <param name="enabled">是否可交互</param>
+        /// <param name="enabled"></param>
         void SetInteractable(bool enabled);
     }
 }

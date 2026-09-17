@@ -70,13 +70,11 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 //等一帧确保延迟销毁生效；销毁顺序不保证，按等价集合断言
                 await UniTask.Yield();
                 Assert.That(loader.ReleasedPrefabs, Is.EquivalentTo(new[] { thirdPrefab, secondPrefab, firstPrefab }));
-                //新契约：Close 内部触发退场过渡（fire-and-forget，视觉自行追赶）
-                Assert.That(firstEvents, Does.Contain("Exit"));
-                Assert.That(secondEvents, Does.Contain("Exit"));
-                Assert.That(thirdEvents, Does.Contain("Exit"));
-                Assert.That(firstEvents, Does.Contain("Close"));
-                Assert.That(secondEvents, Does.Contain("Close"));
-                Assert.That(thirdEvents, Does.Contain("Close"));
+                //容器 Close 强杀清栈：顶层页从未被隐藏，关闭不播退场
+                Assert.That(thirdEvents, Is.EqualTo(new[] { "Close" }));
+                //下层页仅有 Push 时被隐藏的一次 Exit，关闭只补 OnClose
+                Assert.That(firstEvents, Is.EqualTo(new[] { "Exit", "Close" }));
+                Assert.That(secondEvents, Is.EqualTo(new[] { "Exit", "Close" }));
                 container.Close();
                 Assert.That(container.StackCount, Is.Zero);
                 await UniTask.Yield();

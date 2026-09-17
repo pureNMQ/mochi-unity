@@ -100,11 +100,11 @@ namespace Mochi.Unity.Preview.GUI.Tests
             switch (failureStage)
             {
                 case FailureStage.OnOpen:
-                    //失败收尾统一执行 Close：OnOpen 未完成也会补做一次 OnClose 清理，
-                    //Close 的退场过渡随之触发（fire-and-forget）
-                    return new[] { "OnPrepare", "OnOpen", "OnClose", "Exit" };
+                    //失败收尾走 CloseImmediate：OnOpen 未完成也补做 OnClose 清理，不播退场
+                    return new[] { "OnPrepare", "OnOpen", "OnClose" };
                 case FailureStage.OnShow:
-                    return new[] { "OnPrepare", "OnOpen", "OnShow", "OnClose", "Exit" };
+                    //OnShow 抛错时状态已提交，CloseImmediate 先补 OnHide 再 OnClose
+                    return new[] { "OnPrepare", "OnOpen", "OnShow", "OnHide", "OnClose" };
                 default:
                     throw new ArgumentOutOfRangeException(nameof(failureStage), failureStage, null);
             }

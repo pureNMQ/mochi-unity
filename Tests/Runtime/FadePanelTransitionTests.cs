@@ -25,29 +25,29 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator FadeTransition_EnterAndExitReachFinalState()
+        public IEnumerator FadeTransition_EnterAndExitReachFinalAlpha()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 GameObject pageObject = Track(new GameObject("FadePage"));
-                pageObject.SetActive(false);
                 CanvasGroup canvasGroup = pageObject.AddComponent<CanvasGroup>();
                 canvasGroup.alpha = 0f;
                 FadePanelTransition transition = pageObject.AddComponent<FadePanelTransition>();
                 transition.Duration = 0.02f;
 
                 await transition.EnterAsync(CancellationToken.None);
-
-                Assert.That(pageObject.activeSelf, Is.True);
+                Assert.That(canvasGroup.alpha, Is.EqualTo(1f).Within(0.0001f));
 
                 await transition.ExitAsync(CancellationToken.None);
+                Assert.That(canvasGroup.alpha, Is.EqualTo(0f).Within(0.0001f));
 
-                Assert.That(pageObject.activeSelf, Is.False);
+                //激活与停用归 Panel，过渡不改激活状态
+                Assert.That(pageObject.activeSelf, Is.True);
             });
         }
 
         [UnityTest]
-        public IEnumerator FadeTransition_CancellationPropagatesAndDoesNotDeactivatePage()
+        public IEnumerator FadeTransition_CancellationPropagatesWithoutTouchingActivation()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -57,7 +57,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 transition.Duration = 10f;
 
                 canvasGroup.alpha = 0f;
-                pageObject.SetActive(false);
                 CancellationTokenSource enterCancellation = new CancellationTokenSource();
                 UniTask enter = transition.EnterAsync(enterCancellation.Token);
                 await UniTask.Yield();
@@ -68,7 +67,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 enterCancellation.Dispose();
 
                 canvasGroup.alpha = 1f;
-                pageObject.SetActive(true);
                 CancellationTokenSource exitCancellation = new CancellationTokenSource();
                 UniTask exit = transition.ExitAsync(exitCancellation.Token);
                 await UniTask.Yield();

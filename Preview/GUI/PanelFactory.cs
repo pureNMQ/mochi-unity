@@ -59,11 +59,8 @@ namespace Mochi.Unity.Preview.GUI
             }
             catch
             {
-                //失败收尾与容器失败路径同口径：幂等 Hide/Close、释放句柄、销毁实例，异常原样上抛
-                panel.Hide();
-                panel.Close();
-                panel.ReleasePrefabHandleImmediate();
-                Object.Destroy(instance);
+                //失败收尾走立即终结，异常原样上抛
+                panel.CloseImmediate();
                 throw;
             }
         }

@@ -110,8 +110,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(transition.EnterCount, Is.EqualTo(1));
 
                 container.Close();
-                //新契约：面板 Close 内部触发退场过渡（fire-and-forget）
-                Assert.That(transition.ExitCount, Is.EqualTo(1));
+                //容器 Close 强杀清栈：条目不播退场过渡
+                Assert.That(transition.ExitCount, Is.Zero);
             });
         }
 

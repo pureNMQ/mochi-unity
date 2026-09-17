@@ -113,7 +113,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(container.IsVisible, Is.False);
                 Assert.That(panel.IsVisible, Is.True);
 
-                container.ShowAsync().Forget();
+                container.Show();
                 Assert.That(container.IsVisible, Is.True);
             });
         }

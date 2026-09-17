@@ -67,12 +67,88 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 panel.Show();
                 panel.Hide();
 
-                //执行即提交：状态与停用同步生效，退场过渡 fire-and-forget 由组件自行追赶
+                //执行即提交逻辑状态；退场播完后由 Panel 强制停用
                 Assert.That(panel.IsVisible, Is.False);
                 Assert.That(panel.gameObject.activeSelf, Is.False);
                 Assert.That(panel.GetComponent<CountingTransition>().ExitCount, Is.EqualTo(1));
 
                 await UniTask.Yield();
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator Hide_HeldExit_KeepsInstanceActiveUntilExitCompletes()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                RecordingLoader loader = new RecordingLoader();
+                GameObject prefab = CreatePrefab("HeldExitPrefab", withTransition: true);
+                prefab.GetComponent<CountingTransition>().HoldExit = true;
+                loader.Register("panel", prefab);
+
+                CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
+                    loader, "panel", null, null, null, CancellationToken.None);
+                panel.Show();
+
+                panel.Hide();
+
+                //退场动画期间实例存活供播放，输入已禁用
+                Assert.That(panel.IsVisible, Is.False);
+                Assert.That(panel.gameObject.activeSelf, Is.True);
+                Assert.That(panel.CanvasGroup.interactable, Is.False);
+
+                panel.GetComponent<CountingTransition>().ReleaseExit();
+                await UniTask.Yield();
+                Assert.That(panel.gameObject.activeSelf, Is.False);
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator ImmediateVariants_SkipTransitionsEntirely()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                RecordingLoader loader = new RecordingLoader();
+                loader.Register("panel", CreatePrefab("ImmediatePrefab", withTransition: true));
+                CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
+                    loader, "panel", null, null, null, CancellationToken.None);
+
+                panel.ShowImmediate();
+                Assert.That(panel.IsVisible, Is.True);
+                Assert.That(panel.gameObject.activeSelf, Is.True);
+                Assert.That(panel.GetComponent<CountingTransition>().EnterCount, Is.Zero);
+
+                panel.HideImmediate();
+                Assert.That(panel.IsVisible, Is.False);
+                Assert.That(panel.gameObject.activeSelf, Is.False);
+                Assert.That(panel.GetComponent<CountingTransition>().ExitCount, Is.Zero);
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator CloseImmediate_CompletesLogicAndDestroysWithoutExit()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                RecordingLoader loader = new RecordingLoader();
+                GameObject prefab = CreatePrefab("CloseImmediatePrefab", withTransition: true);
+                prefab.GetComponent<CountingTransition>().HoldExit = true;
+                loader.Register("panel", prefab);
+
+                CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
+                    loader, "panel", null, null, null, CancellationToken.None);
+                panel.Show();
+
+                panel.CloseImmediate();
+
+                //不播退场：完整逻辑收尾后立即释放并销毁
+                Assert.That(panel.CloseCount, Is.EqualTo(1));
+                Assert.That(panel.IsOpen, Is.False);
+                Assert.That(panel.GetComponent<CountingTransition>().ExitCount, Is.Zero);
+                Assert.That(loader.ReleaseCount, Is.EqualTo(1));
+
+                await UniTask.Yield();
+                Assert.That(panel == null, Is.True);
             });
         }
 

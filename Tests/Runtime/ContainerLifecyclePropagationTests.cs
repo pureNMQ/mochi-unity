@@ -10,8 +10,7 @@ using UnityEngine.TestTools;
 
 namespace Mochi.Unity.Preview.GUI.Tests
 {
-    //容器显隐传播与隐藏期导航契约用例：隐藏期只推进逻辑不执行视觉，
-    //ShowAsync 按最终栈呈现、根容器 Initialize 后首 Push 带视觉
+    //容器显隐契约：容器 Hide 不传播子面板，重显按最终栈立即呈现，根 Layer 创建即显示
     public class ContainerLifecyclePropagationTests
     {
         private readonly List<GameObject> objectsToDestroy = new List<GameObject>();
@@ -28,7 +27,40 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Page_HideThenPushAndBack_SkipsVisualsButCompletesLogic()
+        public IEnumerator Page_ContainerHide_DoesNotPropagateToChildren()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                PageContainer container = Track(new GameObject("PageContainer")).AddComponent<PageContainer>();
+                GameObject firstPrefab = Track(CreatePagePrefab<RecordingPage>("FirstPrefab"));
+                KeyedLoader loader = new KeyedLoader(firstPrefab);
+                container.Initialize(loader);
+
+                RecordingPage firstPage = await container.PushAsync<RecordingPage>("first");
+                Assert.That(firstPage.ShowCount, Is.EqualTo(1));
+
+                container.Show();
+                Assert.That(container.IsVisible, Is.True);
+
+                //容器 Hide 只停用自身整树，子面板逻辑状态不动
+                container.Hide();
+                Assert.That(container.gameObject.activeSelf, Is.False);
+                Assert.That(firstPage.IsVisible, Is.True);
+                Assert.That(firstPage.gameObject.activeSelf, Is.True);
+                Assert.That(firstPage.HideCount, Is.Zero);
+
+                //重显不重播子面板过渡
+                container.Show();
+                Assert.That(container.gameObject.activeSelf, Is.True);
+                Assert.That(firstPage.IsVisible, Is.True);
+                Assert.That(firstPage.ShowCount, Is.EqualTo(1));
+                Assert.That(firstPage.Transition.EnterCount, Is.EqualTo(1));
+                Assert.That(firstPage.CanvasGroup.interactable, Is.True);
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator Page_HiddenPushAndBack_CompleteLogic_ShowPresentsFinalTop()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -37,128 +69,65 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 GameObject secondPrefab = Track(CreatePagePrefab<RecordingPage>("SecondPrefab"));
                 KeyedLoader loader = new KeyedLoader(firstPrefab, secondPrefab);
                 container.Initialize(loader);
+                container.Show();
 
                 RecordingPage firstPage = await container.PushAsync<RecordingPage>("first");
-                Assert.That(firstPage.ShowCount, Is.EqualTo(1));
-                Assert.That(firstPage.Transition.EnterCount, Is.EqualTo(1));
-
                 container.Hide();
 
-                //容器 Hide：自身逻辑隐藏，向栈内 Panel 传播 Hide 请求（已显示条目执行 OnHide）
+                //容器隐藏期 Push 正常推进：新页照常 Show，前页照常 Hide
+                RecordingPage secondPage = await container.PushAsync<RecordingPage>("second");
+                Assert.That(secondPage.IsVisible, Is.True);
+                Assert.That(secondPage.ShowCount, Is.EqualTo(1));
+                Assert.That(secondPage.Transition.EnterCount, Is.EqualTo(1));
                 Assert.That(firstPage.IsVisible, Is.False);
-                Assert.That(firstPage.gameObject.activeSelf, Is.False);
                 Assert.That(firstPage.HideCount, Is.EqualTo(1));
 
-                //隐藏期 Push：加载、实例化、Prepare、Open、入栈正常；新页保持逻辑隐藏，
-                //不触发 OnShow、不播放入场过渡、不启用输入
-                RecordingPage secondPage = await container.PushAsync<RecordingPage>("second");
-                Assert.That(secondPage, Is.Not.Null);
-                Assert.That(container.StackCount, Is.EqualTo(2));
-                Assert.That(loader.ReleaseCount, Is.Zero);
-                Assert.That(secondPage.IsVisible, Is.False);
-                Assert.That(secondPage.gameObject.activeSelf, Is.False);
-                Assert.That(secondPage.ShowCount, Is.Zero);
-                Assert.That(secondPage.Transition.EnterCount, Is.Zero);
-                Assert.That(secondPage.CanvasGroup.interactable, Is.False);
-
-                //隐藏期 Back：当前条目照常出栈、自毁、释放；Close 的退场过渡无条件触发
-                //（失活实例上无视觉效果），不 Show 前页（销毁前先读过渡计数）
+                //隐藏期 Back：出栈、释放照常；前页恢复显示
                 Assert.That(await container.BackAsync(), Is.True);
                 Assert.That(container.StackCount, Is.EqualTo(1));
                 Assert.That(container.Current, Is.SameAs(firstPage));
                 Assert.That(secondPage.Transition.ExitCount, Is.EqualTo(1));
-                //等一帧确认延迟销毁已生效
                 await UniTask.DelayFrame(1);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
                 Assert.That(loader.ReleasedPrefabs, Is.EquivalentTo(new[] { secondPrefab }));
-                Assert.That(firstPage.IsVisible, Is.False);
-                Assert.That(firstPage.ShowCount, Is.EqualTo(1));
-                Assert.That(firstPage.Transition.EnterCount, Is.EqualTo(1));
-                Assert.That(firstPage.CanvasGroup.interactable, Is.False);
-
                 Assert.That(secondPage == null, Is.True);
+                Assert.That(firstPage.IsVisible, Is.True);
+                Assert.That(firstPage.ShowCount, Is.EqualTo(2));
+
+                container.Show();
+                Assert.That(firstPage.IsVisible, Is.True);
+                Assert.That(firstPage.CanvasGroup.interactable, Is.True);
             });
         }
 
         [UnityTest]
-        public IEnumerator Page_ShowAfterHiddenNavigation_PresentsOnlyFinalTopThenEnablesInput()
+        public IEnumerator Page_HideDuringHeldEnter_CancelsEnterAndReplaysOnNextShow()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 PageContainer container = Track(new GameObject("PageContainer")).AddComponent<PageContainer>();
                 GameObject firstPrefab = Track(CreatePagePrefab<RecordingPage>("FirstPrefab"));
                 GameObject secondPrefab = Track(CreatePagePrefab<RecordingPage>("SecondPrefab"));
-                GameObject thirdPrefab = Track(CreatePagePrefab<RecordingPage>("ThirdPrefab"));
-                KeyedLoader loader = new KeyedLoader(firstPrefab, secondPrefab, thirdPrefab);
-                container.Initialize(loader);
-
-                RecordingPage firstPage = await container.PushAsync<RecordingPage>("first");
-                container.Hide();
-                RecordingPage secondPage = await container.PushAsync<RecordingPage>("second");
-                RecordingPage thirdPage = await container.PushAsync<RecordingPage>("third");
-                Assert.That(container.StackCount, Is.EqualTo(3));
-
-                //隐藏期 Back：C 出栈，最终栈为 A、B
-                Assert.That(await container.BackAsync(), Is.True);
-
-                //中间态 C 不补播：无 OnShow、无 Enter；Close 的退场过渡无条件触发（无视觉效果）
-                Assert.That(thirdPage.ShowCount, Is.Zero);
-                Assert.That(thirdPage.Transition.EnterCount, Is.Zero);
-                Assert.That(thirdPage.Transition.ExitCount, Is.EqualTo(1));
-
-                //Show 按最终栈呈现：只呈现最终 B（OnShow 与入场各一次，不重放隐藏期中间态）
-                secondPage.Transition.HoldEnter = true;
-                await container.ShowAsync();
-
-                //新契约：呈现同步完成，不等待入场动画；D1 输入与焦点随显示即时启用
-                Assert.That(secondPage.IsVisible, Is.True);
-                Assert.That(secondPage.ShowCount, Is.EqualTo(1));
-                Assert.That(secondPage.Transition.EnterCount, Is.EqualTo(1));
-                Assert.That(secondPage.CanvasGroup.interactable, Is.True);
-                Assert.That(container.IsBusy, Is.False);
-                //前页保持隐藏不重复 OnShow
-                Assert.That(firstPage.IsVisible, Is.False);
-                Assert.That(firstPage.ShowCount, Is.EqualTo(1));
-                Assert.That(firstPage.HideCount, Is.EqualTo(1));
-
-                secondPage.Transition.ReleaseEnter();
-                await UniTask.Yield();
-            });
-        }
-
-        [UnityTest]
-        public IEnumerator Page_HideDuringEnterTransition_StopsVisualAndCompletesNavigation()
-        {
-            return UniTask.ToCoroutine(async () =>
-            {
-                PageContainer container = Track(new GameObject("PageContainer")).AddComponent<PageContainer>();
-                GameObject firstPrefab = Track(CreatePagePrefab<RecordingPage>("FirstPrefab"));
-                GameObject secondPrefab = Track(CreatePagePrefab<RecordingPage>("SecondPrefab"));
-                //门控入场沿用 GatedExitPage 模式：挂起在预制体组件上，克隆实例随实例化携带
                 secondPrefab.GetComponent<RecordingPage>().Transition.HoldEnter = true;
                 KeyedLoader loader = new KeyedLoader(firstPrefab, secondPrefab);
                 container.Initialize(loader);
 
                 RecordingPage firstPage = await container.PushAsync<RecordingPage>("first");
-
-                //新契约：Push 不等入场动画，门控挂起也不阻塞提交（Busy 随返回解除）
                 RecordingPage secondPage = await container.PushAsync<RecordingPage>("second");
                 Assert.That(container.IsBusy, Is.False);
                 Assert.That(secondPage.IsVisible, Is.True);
                 Assert.That(secondPage.Transition.EnterCount, Is.EqualTo(1));
 
-                //Hide 打断在途入场视觉：面板即时停用，动画在失活实例上自行追赶，无防御性异常
-                container.Hide();
-
+                //面板级 Hide 取消在途入场并播退场，退场完成即停用
+                secondPage.Hide();
                 Assert.That(secondPage.IsVisible, Is.False);
-                Assert.That(secondPage.ShowCount, Is.EqualTo(1));
                 Assert.That(secondPage.HideCount, Is.EqualTo(1));
-                //停用即阻断输入（新契约：输入随显示状态，CanvasGroup 标志在失活下无意义）
+                Assert.That(secondPage.Transition.ExitCount, Is.EqualTo(1));
                 Assert.That(secondPage.gameObject.activeSelf, Is.False);
-                Assert.That(firstPage.IsVisible, Is.False);
 
-                //恢复显示：呈现最终栈，被中断的页面在此补齐入场；输入随显示即时启用
-                await container.ShowAsync();
+                //再次显示播新入场，不受被取消的旧入场影响
+                secondPage.Show();
+                Assert.That(secondPage.IsVisible, Is.True);
                 Assert.That(secondPage.Transition.EnterCount, Is.EqualTo(2));
                 Assert.That(secondPage.CanvasGroup.interactable, Is.True);
 
@@ -179,8 +148,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
                 navigator.Initialize(loader);
 
-                //C1 核对断言：根容器 Initialize 成功即逻辑显示（视觉跳过默认复位），
-                //首个 Push 正常执行 OnShow 与入场过渡并启用输入，业务无需手动 Show
+                //根 Layer 创建即逻辑显示，首个 Push 带视觉，业务无需手动 Show
+                Assert.That(navigator.Pages.IsVisible, Is.True);
                 RecordingPage page = await navigator.Pages.PushAsync<RecordingPage>("first");
 
                 Assert.That(page, Is.Not.Null);
@@ -201,6 +170,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 KeyedLoader loader = new KeyedLoader(prefab);
                 container.Initialize(loader);
                 SetBackdropDuration(container, 0f);
+                container.Show();
 
                 List<string> notifications = new List<string>();
                 RecordingModal modal = await container.PushAsync<RecordingModal, string>(
@@ -209,9 +179,10 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(modal.ShowCount, Is.EqualTo(1));
                 Assert.That(GetBackdropAlpha(container), Is.EqualTo(1f));
 
+                //容器隐藏不影响子面板逻辑状态
                 container.Hide();
-                Assert.That(modal.IsVisible, Is.False);
-                Assert.That(modal.HideCount, Is.EqualTo(1));
+                Assert.That(modal.IsVisible, Is.True);
+                Assert.That(modal.HideCount, Is.Zero);
 
                 //隐藏期完成：不等容器显示，按确定的结果在清理完成后立即通知
                 Assert.That(await modal.CompleteResultAsync("ok"), Is.True);
@@ -219,10 +190,8 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(notifications, Is.EqualTo(new[] { "True:ok" }));
                 Assert.That(container.StackCount, Is.Zero);
                 Assert.That(container.IsBusy, Is.False);
-                //等一帧确保延迟销毁生效
                 await UniTask.DelayFrame(1);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
-                //清理收尾复位 Backdrop；不补 OnShow
                 Assert.That(GetBackdropAlpha(container), Is.EqualTo(0f));
                 Assert.That(GetBackdropRaycasts(container), Is.False);
                 Assert.That(modal.ShowCount, Is.EqualTo(1));
@@ -242,6 +211,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 KeyedLoader loader = new KeyedLoader(firstPrefab, secondPrefab);
                 container.Initialize(loader);
                 SetBackdropDuration(container, 0f);
+                container.Show();
 
                 List<string> notifications = new List<string>();
                 RecordingModal firstModal = await container.PushAsync<RecordingModal, string>(
@@ -254,19 +224,20 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     "second",
                     new ModalResultCallback<string>((hasResult, result) => notifications.Add("second:" + hasResult)));
 
-                //隐藏期 Push：无 OnShow、无入场，Backdrop 不重复淡入淡出（保持在场状态）
-                Assert.That(secondModal.IsVisible, Is.False);
-                Assert.That(secondModal.ShowCount, Is.Zero);
-                Assert.That(secondModal.Transition.EnterCount, Is.Zero);
+                //隐藏期 Push 照常 Show，已有 Backdrop 不重复淡入
+                Assert.That(secondModal.IsVisible, Is.True);
+                Assert.That(secondModal.ShowCount, Is.EqualTo(1));
+                Assert.That(secondModal.Transition.EnterCount, Is.EqualTo(1));
                 Assert.That(GetBackdropAlpha(container), Is.EqualTo(1f));
 
-                //Show 按多层展示规则恢复所需层并同步 Backdrop；动画结束后仅栈顶层启用输入
-                await container.ShowAsync();
+                //重显按最终栈立即呈现：隐藏层补显示但不重播入场
+                container.Show();
 
                 Assert.That(firstModal.IsVisible, Is.True);
                 Assert.That(secondModal.IsVisible, Is.True);
-                Assert.That(firstModal.ShowCount, Is.EqualTo(2));
-                Assert.That(firstModal.Transition.EnterCount, Is.EqualTo(2));
+                //Modal 多层展示：前层未被隐藏，重显不重复 OnShow
+                Assert.That(firstModal.ShowCount, Is.EqualTo(1));
+                Assert.That(firstModal.Transition.EnterCount, Is.EqualTo(1));
                 Assert.That(secondModal.ShowCount, Is.EqualTo(1));
                 Assert.That(secondModal.Transition.EnterCount, Is.EqualTo(1));
                 Assert.That(GetBackdropAlpha(container), Is.EqualTo(1f));
@@ -277,15 +248,14 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Assert.That(secondModal.CanvasGroup.interactable, Is.True);
                 Assert.That(firstModal.CanvasGroup.interactable, Is.False);
 
-                //再次隐藏后完成栈顶 Modal：不 Show 前层、不启用其输入，通知仍在清理后交付
+                //再次隐藏后完成栈顶 Modal：剩余栈顶恢复显示与输入，通知在清理后交付
                 container.Hide();
                 Assert.That(await secondModal.CompleteResultAsync("done"), Is.True);
 
-                //first 仍在栈中不交付通知；second 按确定结果在清理后交付
                 Assert.That(notifications, Is.EqualTo(new[] { "second:True" }));
                 Assert.That(container.StackCount, Is.EqualTo(1));
-                Assert.That(firstModal.IsVisible, Is.False);
-                Assert.That(firstModal.CanvasGroup.interactable, Is.False);
+                Assert.That(firstModal.IsVisible, Is.True);
+                Assert.That(firstModal.CanvasGroup.interactable, Is.True);
             });
         }
 
@@ -311,7 +281,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
             string[] names = new string[root.childCount];
             for (int index = 0; index < root.childCount; index++)
             {
-                //实例名会带 (Clone) 后缀，比较时统一剥掉，断言保持可读的语义名
                 names[index] = root.GetChild(index).name.Replace("(Clone)", string.Empty);
             }
 
@@ -428,7 +397,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
             }
         }
 
-        //计数型过渡组件：记录 Enter/Exit 调用次数，可门控挂起入场（供隐藏中断与动画后启用输入断言）
+        //计数型过渡：记录 Enter/Exit 次数，可门控挂起供中断时序断言
         private sealed class CounterTransition : MonoBehaviour, IPanelTransition
         {
             private readonly UniTaskCompletionSource enterGate = new UniTaskCompletionSource();
@@ -446,7 +415,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
             public UniTask EnterAsync(CancellationToken cancellationToken)
             {
                 EnterCount++;
-                //门控挂起经取消令牌关联：Hide 停止视觉时立即以取消结束（组件契约保证干净停止）
                 return holdEnter
                     ? enterGate.Task.AttachExternalCancellation(cancellationToken)
                     : UniTask.CompletedTask;

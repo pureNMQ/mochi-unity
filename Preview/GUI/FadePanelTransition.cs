@@ -4,6 +4,7 @@ using UnityEngine;
 
 namespace Mochi.Unity.Preview.GUI
 {
+    //激活与停用归 Panel 管，本组件只负责 alpha 过渡
     [RequireComponent(typeof(CanvasGroup))]
     public sealed class FadePanelTransition : MonoBehaviour, IPanelTransition
     {
@@ -18,7 +19,6 @@ namespace Mochi.Unity.Preview.GUI
 
         public UniTask EnterAsync(CancellationToken cancellationToken)
         {
-            gameObject.SetActive(true);
             return FadeAsync(1f, cancellationToken);
         }
 
@@ -36,11 +36,6 @@ namespace Mochi.Unity.Preview.GUI
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 target.alpha = targetAlpha;
-                if (targetAlpha <= 0f)
-                {
-                    gameObject.SetActive(false);
-                }
-
                 return;
             }
 
@@ -55,10 +50,6 @@ namespace Mochi.Unity.Preview.GUI
 
             cancellationToken.ThrowIfCancellationRequested();
             target.alpha = targetAlpha;
-            if (targetAlpha <= 0f)
-            {
-                gameObject.SetActive(false);
-            }
         }
     }
 }

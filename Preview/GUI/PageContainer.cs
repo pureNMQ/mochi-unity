@@ -82,22 +82,13 @@ namespace Mochi.Unity.Preview.GUI
                     return null;
                 }
 
-                if (!SuppressVisuals)
+                //新页逻辑显示的同一刻前页即时隐藏，新页入场在下层已空状态播放
+                if (previousPage != null)
                 {
-                    //新页逻辑显示的同一刻前页即时隐藏（焦点随停用保存），新页入场在下层已空状态播放
-                    if (previousPage != null)
-                    {
-                        previousPage.Hide();
-                    }
+                    previousPage.Hide();
+                }
 
-                    //显示即提交状态、启用输入与焦点，入场过渡由 Panel fire-and-forget
-                    page.Show();
-                }
-                else
-                {
-                    //隐藏期：不执行 OnShow 与入场，保持实例失活；交互组同步禁用，不启用输入
-                    page.SetInteractable(false);
-                }
+                page.Show();
 
                 AddStackEntry(page);
                 committed = true;
@@ -116,16 +107,12 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        //Push 失败收尾：集中清理未提交实例；工厂失败（page 为 null）时资源已由工厂处理。
-        //Close 自毁接管资源与销毁，显式释放与销毁保证即时收回（不等退场动画）
+        //未提交实例立即终结，不等退场动画；实例已销毁时 CloseImmediate 幂等跳过
         private void CleanupFailedPush(Panel page)
         {
-            //按 Unity 对象有效性判断：实例已提前销毁时跳过生命周期调用与实例销毁
             if (page != null)
             {
-                page.Close();
-                page.ReleasePrefabHandleImmediate();
-                Destroy(page.gameObject);
+                page.CloseImmediate();
             }
         }
 
@@ -170,9 +157,8 @@ namespace Mochi.Unity.Preview.GUI
                 RemoveStackEntryAt(StackCount - 1);
                 try
                 {
-                    //可见期恢复前页：显示即启用输入与焦点，当前页退场动画在其上方淡出；
-                    //隐藏期不 Show 前页，保持逻辑隐藏，由下一次 ShowAsync 呈现流程统一恢复
-                    if (!SuppressVisuals && previousEntry.Panel != null)
+                    //当前页退场动画在其上方淡出，前页恢复显示即启用输入与焦点
+                    if (previousEntry.Panel != null)
                     {
                         previousEntry.Panel.Show();
                     }
@@ -196,29 +182,27 @@ namespace Mochi.Unity.Preview.GUI
             return UniTask.FromResult(true);
         }
 
-        //容器显示的呈现流程：按最终栈只呈现当前页（显示即启用输入与焦点，入场自行播放），
-        //其余条目保持逻辑隐藏，不重放中间态
-        protected override void PresentOnShow()
+        //容器重显时按最终栈立即呈现：只呈现当前页，不重播过渡
+        protected override void OnShow()
         {
             if (StackCount == 0)
             {
                 return;
             }
 
-            //仅显示当前页：栈内其余页按显示规则保持隐藏（已隐藏条目由 Hide 幂等兜底）
             for (int index = StackCount - 2; index >= 0; index--)
             {
                 Panel lower = GetStackEntry(index).Panel;
                 if (lower != null)
                 {
-                    lower.Hide();
+                    lower.HideImmediate();
                 }
             }
 
             Panel current = GetStackEntry(StackCount - 1).Panel;
             if (current != null)
             {
-                current.Show();
+                current.ShowImmediate();
             }
         }
 
@@ -231,11 +215,10 @@ namespace Mochi.Unity.Preview.GUI
                 BeginBusyTakeOver();
             }
 
-            //显式维护 Busy：清栈期间容器不接受新操作，完成后复位，容器本身继续可用
             IsBusy = true;
             try
             {
-                ClearPages(immediateDestroy: false);
+                ClearPages(immediateDestroy: true);
                 base.OnClose();
             }
             finally
@@ -244,8 +227,26 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        //共用清栈：从栈顶向下逐条目先解除关系（移出栈）再关闭面板——
-        //immediateDestroy 为真时（销毁强杀）显式释放与销毁、不等退场动画
+        /// <summary>清空页面栈，容器保留可用；Busy 或不可用时静默拒绝</summary>
+        public void Clear()
+        {
+            if (IsDisposed || IsBusy)
+            {
+                return;
+            }
+
+            IsBusy = true;
+            try
+            {
+                ClearPages(immediateDestroy: false);
+            }
+            finally
+            {
+                IsBusy = false;
+            }
+        }
+
+        //共用清栈：先移出条目再关闭面板，immediateDestroy 走立即终结
         private void ClearPages(bool immediateDestroy)
         {
             while (StackCount > 0)
@@ -253,14 +254,15 @@ namespace Mochi.Unity.Preview.GUI
                 StackEntry entry = GetStackEntry(StackCount - 1);
                 RemoveStackEntryAt(StackCount - 1);
 
-                //实例有效性检查：仅存活实例执行生命周期调用与销毁
                 if (entry.Panel != null)
                 {
-                    entry.Panel.Close();
                     if (immediateDestroy)
                     {
-                        entry.Panel.ReleasePrefabHandleImmediate();
-                        Destroy(entry.Panel.gameObject);
+                        entry.Panel.CloseImmediate();
+                    }
+                    else
+                    {
+                        entry.Panel.Close();
                     }
                 }
             }
@@ -270,7 +272,7 @@ namespace Mochi.Unity.Preview.GUI
         //被关闭的是栈顶时按最终栈恢复新顶显示，中段抽出不打扰其余条目
         protected override void HandleSelfClosedPanel(Panel panel, bool wasTop)
         {
-            if (!wasTop || SuppressVisuals || StackCount == 0)
+            if (!wasTop || StackCount == 0)
             {
                 return;
             }

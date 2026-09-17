@@ -104,12 +104,12 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
             if (failureStage == FailureStage.AOnShow)
             {
-                //前页 OnShow 抛错属生命周期契约破坏、容器不防御：激活完成但 IsVisible 未置位，
-                //交互保持禁用，原选中目标随失败页销毁失效
+                //前页 OnShow 抛错属生命周期契约破坏、容器不防御：
+                //状态先于回调提交，显示与交互已生效，焦点已恢复到前页记忆
                 Assert.That(firstPage.gameObject.activeSelf, Is.True);
-                Assert.That(firstPage.IsVisible, Is.False);
-                Assert.That(firstPage.CanvasGroup.interactable, Is.False);
-                Assert.That(eventSystem.currentSelectedGameObject == null, Is.True);
+                Assert.That(firstPage.IsVisible, Is.True);
+                Assert.That(firstPage.CanvasGroup.interactable, Is.True);
+                Assert.That(eventSystem.currentSelectedGameObject, Is.SameAs(GetDefaultFocusTarget(firstPage)));
             }
             else
             {

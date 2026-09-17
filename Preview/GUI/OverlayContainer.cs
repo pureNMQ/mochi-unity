@@ -6,9 +6,6 @@ using UnityEngine;
 
 namespace Mochi.Unity.Preview.GUI
 {
-    //统一覆盖层容器：职责仅挂载点、根 Layer 排序、实例登记与查询；
-    //不托管 Show/Hide、不执行 Close、不池化、无策略配置、无 KeepAlive 概念，
-    //经 Open 入口创建的 Panel 归属本容器（HUD/Notification 根 Layer 各持一实例，不派生子类型）
     public sealed class OverlayContainer : PanelContainer
     {
         private readonly Dictionary<string, Panel> registeredPanels = new Dictionary<string, Panel>();
@@ -18,8 +15,7 @@ namespace Mochi.Unity.Preview.GUI
         protected override CancellationToken LifetimeCancellationToken => lifetimeCancellation.Token;
 
         /// <summary>
-        /// 打开面板：经工厂完成创建到打开的全部流程，登记归属并初始即显示。
-        /// 已登记的 key 幂等返回既有实例（需重建先对该实例 Close）。
+        /// 在容器中打开一个面板实例，如果已存在则返回已存在的实例
         /// </summary>
         /// <typeparam name="TPanel">面板类型</typeparam>
         /// <param name="key">面板预制体的资源键值</param>
@@ -65,8 +61,6 @@ namespace Mochi.Unity.Preview.GUI
                 registeredPanels[key] = panel;
                 panel.Closed += HandleRegisteredPanelClosed;
 
-                //创建即显示：显示即提交状态、启用输入与焦点，入场过渡由 Panel fire-and-forget；
-                //后续显隐走 Panel 公开 API，容器不托管
                 panel.Show();
                 return panel;
             }
@@ -100,6 +94,25 @@ namespace Mochi.Unity.Preview.GUI
             return false;
         }
 
+        /// <summary>关闭全部登记面板，容器保留可用；除名随各面板 Closed 事件完成</summary>
+        public void Clear()
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            //快照遍历：关闭过程会经 Closed 事件改写登记表
+            List<Panel> owned = new List<Panel>(registeredPanels.Values);
+            foreach (Panel panel in owned)
+            {
+                if (panel != null)
+                {
+                    panel.Close();
+                }
+            }
+        }
+
         //已销毁实例视为未登记：Close 自毁后同一 key 可重建
         private bool TryGetRegistered(string key, out Panel panel)
         {
@@ -127,16 +140,6 @@ namespace Mochi.Unity.Preview.GUI
             }
         }
 
-        //不托管所登记 Panel 的显隐：整树隐藏随父级停用自然发生，逻辑显隐由 Panel 公开 API 决定
-        protected override void PropagateHideToStack()
-        {
-        }
-
-        //无栈可呈现：各 Panel 的显示恢复由其自身 API 执行
-        protected override void PresentOnShow()
-        {
-        }
-
         protected override void OnDestroy()
         {
             if (IsDisposed)
@@ -146,32 +149,24 @@ namespace Mochi.Unity.Preview.GUI
                 return;
             }
 
-            //入口最先标记不可用并取消在途操作，随后对所有归属 Panel 强杀：
-            //立即销毁并释放句柄，不等退场动画；登记随销毁清空
             IsDisposed = true;
             IsBusy = false;
             lifetimeCancellation.Cancel();
-            try
+
+            //强杀路径先解除监听再关闭，避免关闭事件回写登记表
+            List<Panel> owned = new List<Panel>(registeredPanels.Values);
+            foreach (Panel panel in owned)
             {
-                //快照遍历：强杀路径先解除监听再关闭，避免关闭事件回写登记表
-                List<Panel> owned = new List<Panel>(registeredPanels.Values);
-                foreach (Panel panel in owned)
+                if (panel != null)
                 {
-                    if (panel != null)
-                    {
-                        panel.Closed -= HandleRegisteredPanelClosed;
-                        panel.Close();
-                        panel.ReleasePrefabHandleImmediate();
-                        Destroy(panel.gameObject);
-                    }
+                    panel.Closed -= HandleRegisteredPanelClosed;
+                    panel.CloseImmediate();
                 }
             }
-            finally
-            {
-                registeredPanels.Clear();
-                lifetimeCancellation.Dispose();
-                base.OnDestroy();
-            }
+
+            registeredPanels.Clear();
+            lifetimeCancellation.Dispose();
+            base.OnDestroy();
         }
     }
 }
