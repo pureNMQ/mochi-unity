@@ -20,7 +20,9 @@ namespace Mochi.Unity.Preview.GUI
         /// <returns>创建的页面实例</returns>
         public UniTask<TPage> PushAsync<TPage>(string key) where TPage : Panel
         {
-            return PushCoreAsync<TPage>(key, (page, token) => page.PrepareInternalAsync(token));
+            return PushCoreAsync<TPage>(
+                key,
+                cancellationToken => PanelFactory.CreateAsync<TPage>(Loader, key, transform, cancellationToken));
         }
 
         /// <summary>
@@ -34,13 +36,16 @@ namespace Mochi.Unity.Preview.GUI
         public UniTask<TPage> PushAsync<TPage, TData>(string key, TData data)
             where TPage : Panel<TData>
         {
-            return PushCoreAsync<TPage>(key, (page, token) => page.PrepareInternalAsync(data, token));
+            return PushCoreAsync<TPage>(
+                key,
+                cancellationToken => PanelFactory.CreateAsync<TPage, TData>(
+                    Loader, key, transform, null, data, cancellationToken));
         }
 
         //Busy 仅覆盖加载+Prepare+逻辑提交，过渡由 Panel fire-and-forget，容器不等待
         private async UniTask<TPage> PushCoreAsync<TPage>(
             string key,
-            Func<TPage, CancellationToken, UniTask> prepareAsync)
+            Func<CancellationToken, UniTask<TPage>> createAsync)
             where TPage : Panel
         {
             if (IsDisposed)
@@ -75,8 +80,8 @@ namespace Mochi.Unity.Preview.GUI
                     previousPage.SetInteractable(false);
                 }
 
-                //工厂完成加载、绑定、Prepare 与 OnOpen；失败返回 null 或抛出并已自收尾
-                page = await PanelFactory.CreateAsync<TPage>(Loader, key, transform, null, prepareAsync, cancellationToken);
+                //工厂完成加载、Prepare 与 OnOpen；失败返回 null 或抛出并已自收尾
+                page = await createAsync(cancellationToken);
                 if (page == null)
                 {
                     return null;

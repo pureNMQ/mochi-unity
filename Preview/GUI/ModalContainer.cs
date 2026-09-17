@@ -34,8 +34,8 @@ namespace Mochi.Unity.Preview.GUI
         {
             return PushCoreAsync<TModal>(
                 key,
-                (modal, cancellationToken) => modal.PrepareInternalAsync(cancellationToken),
-                null);
+                cancellationToken => PanelFactory.CreateAsync<TModal>(
+                    Loader, key, transform, created => created.Bind(this), cancellationToken));
         }
 
         /// <summary>
@@ -53,8 +53,16 @@ namespace Mochi.Unity.Preview.GUI
         {
             return PushCoreAsync<TModal>(
                 key,
-                (modal, cancellationToken) => modal.PrepareInternalAsync(cancellationToken),
-                modal => modal.BindResultCallback(callback));
+                cancellationToken => PanelFactory.CreateAsync<TModal>(
+                    Loader,
+                    key,
+                    transform,
+                    created =>
+                    {
+                        created.Bind(this);
+                        created.BindResultCallback(callback);
+                    },
+                    cancellationToken));
         }
 
         /// <summary>
@@ -75,15 +83,23 @@ namespace Mochi.Unity.Preview.GUI
         {
             return PushCoreAsync<TModal>(
                 key,
-                (modal, cancellationToken) => modal.PrepareInternalAsync(data, cancellationToken),
-                modal => modal.BindResultCallback(callback));
+                cancellationToken => PanelFactory.CreateAsync<TModal, TData, TResult>(
+                    Loader,
+                    key,
+                    transform,
+                    created =>
+                    {
+                        created.Bind(this);
+                        created.BindResultCallback(callback);
+                    },
+                    data,
+                    cancellationToken));
         }
 
         //Busy 仅覆盖加载+Prepare+逻辑提交，入场与 Backdrop 淡入并行 fire-and-forget，容器不等待
         private async UniTask<TModal> PushCoreAsync<TModal>(
             string key,
-            Func<TModal, CancellationToken, UniTask> prepareAsync,
-            Action<TModal> bindCallback)
+            Func<CancellationToken, UniTask<TModal>> createAsync)
             where TModal : ModalPanel
         {
             if (IsDisposed || IsBusy)
@@ -111,17 +127,7 @@ namespace Mochi.Unity.Preview.GUI
                 }
 
                 //工厂完成加载、绑定（Bind 与结果回调）、Prepare 与 OnOpen；失败返回 null 或抛出并已自收尾
-                modal = await PanelFactory.CreateAsync<TModal>(
-                    Loader,
-                    key,
-                    transform,
-                    created =>
-                    {
-                        created.Bind(this);
-                        bindCallback?.Invoke(created);
-                    },
-                    prepareAsync,
-                    cancellationToken);
+                modal = await createAsync(cancellationToken);
                 if (modal == null)
                 {
                     return null;

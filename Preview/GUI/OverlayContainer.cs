@@ -52,7 +52,7 @@ namespace Mochi.Unity.Preview.GUI
             try
             {
                 TPanel panel = await PanelFactory.CreateAsync<TPanel>(
-                    Loader, key, transform, null, null, LifetimeCancellationToken);
+                    Loader, key, transform, LifetimeCancellationToken);
                 if (panel == null)
                 {
                     return null;

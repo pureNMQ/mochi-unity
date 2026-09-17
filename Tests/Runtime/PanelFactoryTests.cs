@@ -36,7 +36,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Transform parent = Track(new GameObject("Parent")).transform;
 
                 FactoryPage panel = await PanelFactory.CreateAsync<FactoryPage>(
-                    loader, "key", parent, null, null, CancellationToken.None);
+                    loader, "key", parent, CancellationToken.None);
 
                 //完成打开但保持失活：显示与入场由调用方决定
                 Assert.That(panel, Is.Not.Null);
@@ -71,11 +71,6 @@ namespace Mochi.Unity.Preview.GUI.Tests
                         candidate.Order = order;
                         order.Add("configure");
                     },
-                    (candidate, token) =>
-                    {
-                        order.Add("prepare");
-                        return UniTask.CompletedTask;
-                    },
                     CancellationToken.None);
 
                 Assert.That(order, Is.EqualTo(new[] { "configure", "prepare", "open" }));
@@ -92,7 +87,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Transform parent = Track(new GameObject("Parent")).transform;
 
                 FactoryPage panel = await PanelFactory.CreateAsync<FactoryPage>(
-                    loader, "key", parent, null, null, CancellationToken.None);
+                    loader, "key", parent, CancellationToken.None);
 
                 Assert.That(panel, Is.Null);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(0));
@@ -110,7 +105,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 Transform parent = Track(new GameObject("Parent")).transform;
 
                 FactoryPage panel = await PanelFactory.CreateAsync<FactoryPage>(
-                    loader, "key", parent, null, null, CancellationToken.None);
+                    loader, "key", parent, CancellationToken.None);
 
                 Assert.That(panel, Is.Null);
                 Assert.That(loader.ReleaseCount, Is.EqualTo(1));
@@ -127,20 +122,15 @@ namespace Mochi.Unity.Preview.GUI.Tests
         {
             return UniTask.ToCoroutine(async () =>
             {
-                GameObject prefab = Track(CreatePrefab<FactoryPage>("FactoryPrefab", active: true));
+                GameObject prefab = Track(CreatePrefab<ThrowingPreparePage>("FactoryPrefab", active: true));
                 CountingLoader loader = new CountingLoader(prefab);
                 Transform parent = Track(new GameObject("Parent")).transform;
                 InvalidOperationException thrown = null;
 
                 try
                 {
-                    await PanelFactory.CreateAsync<FactoryPage>(
-                        loader,
-                        "key",
-                        parent,
-                        null,
-                        (candidate, token) => throw new InvalidOperationException("prepare failed"),
-                        CancellationToken.None);
+                    await PanelFactory.CreateAsync<ThrowingPreparePage>(
+                        loader, "key", parent, CancellationToken.None);
                 }
                 catch (InvalidOperationException exception)
                 {
@@ -162,29 +152,25 @@ namespace Mochi.Unity.Preview.GUI.Tests
         {
             return UniTask.ToCoroutine(async () =>
             {
-                GameObject prefab = Track(CreatePrefab<FactoryPage>("FactoryPrefab", active: true));
+                GameObject prefab = Track(CreatePrefab<CancellingPreparePage>("FactoryPrefab", active: true));
+                CancellationTokenSource cancellation = new CancellationTokenSource();
+                CancellingPreparePage.SharedSource = cancellation;
                 CountingLoader loader = new CountingLoader(prefab);
                 Transform parent = Track(new GameObject("Parent")).transform;
-                CancellationTokenSource cancellation = new CancellationTokenSource();
 
                 OperationCanceledException cancelled = null;
                 try
                 {
-                    await PanelFactory.CreateAsync<FactoryPage>(
-                        loader,
-                        "key",
-                        parent,
-                        null,
-                        (candidate, token) =>
-                        {
-                            cancellation.Cancel();
-                            return UniTask.CompletedTask;
-                        },
-                        cancellation.Token);
+                    await PanelFactory.CreateAsync<CancellingPreparePage>(
+                        loader, "key", parent, cancellation.Token);
                 }
                 catch (OperationCanceledException exception)
                 {
                     cancelled = exception;
+                }
+                finally
+                {
+                    CancellingPreparePage.SharedSource = null;
                 }
 
                 Assert.That(cancelled, Is.Not.Null);
@@ -215,11 +201,17 @@ namespace Mochi.Unity.Preview.GUI.Tests
         {
         }
 
-        private sealed class FactoryPage : Panel
+        private class FactoryPage : Panel
         {
             public List<string> Order { get; set; }
             public int OpenCount { get; private set; }
             public int CloseCount { get; private set; }
+
+            protected override UniTask OnPrepareAsync(CancellationToken cancellationToken)
+            {
+                Order?.Add("prepare");
+                return UniTask.CompletedTask;
+            }
 
             protected override void OnOpen()
             {
@@ -230,6 +222,26 @@ namespace Mochi.Unity.Preview.GUI.Tests
             protected override void OnClose()
             {
                 CloseCount++;
+            }
+        }
+
+        private sealed class ThrowingPreparePage : FactoryPage
+        {
+            protected override UniTask OnPrepareAsync(CancellationToken cancellationToken)
+            {
+                throw new InvalidOperationException("prepare failed");
+            }
+        }
+
+        //Instantiate 不复制非序列化引用，取消源只能经静态共享给实例
+        private sealed class CancellingPreparePage : FactoryPage
+        {
+            public static CancellationTokenSource SharedSource { get; set; }
+
+            protected override UniTask OnPrepareAsync(CancellationToken cancellationToken)
+            {
+                SharedSource.Cancel();
+                return UniTask.CompletedTask;
             }
         }
 

@@ -37,7 +37,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("panel", prefab);
 
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
 
                 //同步 Show 立即返回：入场动画被挂起也不阻塞调用方
                 panel.Show();
@@ -62,7 +62,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 RecordingLoader loader = new RecordingLoader();
                 loader.Register("panel", CreatePrefab("HidePrefab", withTransition: true));
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
 
                 panel.Show();
                 panel.Hide();
@@ -87,7 +87,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("panel", prefab);
 
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
                 panel.Show();
 
                 panel.Hide();
@@ -111,7 +111,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 RecordingLoader loader = new RecordingLoader();
                 loader.Register("panel", CreatePrefab("ImmediatePrefab", withTransition: true));
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
 
                 panel.ShowImmediate();
                 Assert.That(panel.IsVisible, Is.True);
@@ -136,7 +136,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("panel", prefab);
 
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
                 panel.Show();
 
                 panel.CloseImmediate();
@@ -163,7 +163,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("panel", prefab);
 
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
                 panel.Show();
 
                 panel.Close();
@@ -190,7 +190,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 RecordingLoader loader = new RecordingLoader();
                 loader.Register("panel", CreatePrefab("PlainPrefab", withTransition: false));
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
 
                 panel.Close();
 
@@ -213,7 +213,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("panel", prefab);
 
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
                 panel.Show();
 
                 panel.Close();
@@ -245,7 +245,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("panel", prefab);
 
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
                 panel.Show();
                 panel.Close();
                 Assert.That(loader.ReleaseCount, Is.EqualTo(0));
@@ -267,7 +267,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 RecordingLoader loader = new RecordingLoader();
                 loader.Register("panel", CreatePrefab("EventsPrefab", withTransition: false));
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
 
                 List<string> events = new List<string>();
                 panel.Shown += changed => events.Add("Shown:" + changed.IsVisible);
@@ -295,7 +295,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 RecordingLoader loader = new RecordingLoader();
                 loader.Register("panel", CreatePrefab("CloseVisiblePrefab", withTransition: false));
                 CountingPanel panel = await PanelFactory.CreateAsync<CountingPanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
 
                 List<string> events = new List<string>();
                 panel.Hidden += _ => events.Add("Hidden");
@@ -318,7 +318,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 loader.Register("panel", CreatePrefab<ThrowingOnClosePanel>("ThrowingPrefab", withTransition: false));
 
                 ThrowingOnClosePanel panel = await PanelFactory.CreateAsync<ThrowingOnClosePanel>(
-                    loader, "panel", null, null, null, CancellationToken.None);
+                    loader, "panel", null, CancellationToken.None);
 
                 bool closedNotified = false;
                 panel.Closed += _ => closedNotified = true;
