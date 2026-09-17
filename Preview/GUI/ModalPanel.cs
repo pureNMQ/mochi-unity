@@ -20,7 +20,7 @@ namespace Mochi.Unity.Preview.GUI
             return container == null ? UniTask.FromResult(false) : container.CancelAsync(this);
         }
 
-        //Bind 只负责绑定容器；结果回调由泛型 Push 重载经强类型 BindResultCallback 在 Prepare 前绑定
+        //Bind 只负责绑定容器；结果回调由泛型 Push 重载经强类型 BindResultCallback 在工厂返回后绑定
         internal void Bind(ModalContainer owner)
         {
             container = owner;

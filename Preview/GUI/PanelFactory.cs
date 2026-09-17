@@ -7,6 +7,7 @@ using Object = UnityEngine.Object;
 
 namespace Mochi.Unity.Preview.GUI
 {
+    //工厂只负责构造到 OnOpen；容器所有权绑定（如 Modal 的 Bind）由调用方在返回后完成
     public static class PanelFactory
     {
         public static UniTask<TPanel> CreateAsync<TPanel>(
@@ -19,24 +20,6 @@ namespace Mochi.Unity.Preview.GUI
                 loader,
                 key,
                 parent,
-                null,
-                (panel, token) => panel.PrepareInternalAsync(token),
-                cancellationToken);
-        }
-
-        //configure 供调用方在 Prepare 前完成自有绑定（如 Modal 的 Bind）
-        public static UniTask<TPanel> CreateAsync<TPanel>(
-            IPanelLoader loader,
-            string key,
-            Transform parent,
-            Action<TPanel> configure,
-            CancellationToken cancellationToken) where TPanel : Panel
-        {
-            return CreateCoreAsync<TPanel>(
-                loader,
-                key,
-                parent,
-                configure,
                 (panel, token) => panel.PrepareInternalAsync(token),
                 cancellationToken);
         }
@@ -45,7 +28,6 @@ namespace Mochi.Unity.Preview.GUI
             IPanelLoader loader,
             string key,
             Transform parent,
-            Action<TPanel> configure,
             TData data,
             CancellationToken cancellationToken) where TPanel : Panel<TData>
         {
@@ -53,7 +35,6 @@ namespace Mochi.Unity.Preview.GUI
                 loader,
                 key,
                 parent,
-                configure,
                 (panel, token) => panel.PrepareInternalAsync(data, token),
                 cancellationToken);
         }
@@ -62,7 +43,6 @@ namespace Mochi.Unity.Preview.GUI
             IPanelLoader loader,
             string key,
             Transform parent,
-            Action<TPanel> configure,
             TData data,
             CancellationToken cancellationToken) where TPanel : ModalPanel<TData, TResult>
         {
@@ -70,17 +50,15 @@ namespace Mochi.Unity.Preview.GUI
                 loader,
                 key,
                 parent,
-                configure,
                 (panel, token) => panel.PrepareInternalAsync(data, token),
                 cancellationToken);
         }
 
-        //创建到打开的全部流程归工厂：重载只决定 Prepare 的数据形态，主体收敛在私有核心
+        //重载只决定 Prepare 的数据形态，创建到打开的主体收敛在私有核心
         private static async UniTask<TPanel> CreateCoreAsync<TPanel>(
             IPanelLoader loader,
             string key,
             Transform parent,
-            Action<TPanel> configure,
             Func<TPanel, CancellationToken, UniTask> prepareAsync,
             CancellationToken cancellationToken) where TPanel : Panel
         {
@@ -108,7 +86,6 @@ namespace Mochi.Unity.Preview.GUI
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                configure?.Invoke(panel);
 
                 await prepareAsync(panel, cancellationToken);
 

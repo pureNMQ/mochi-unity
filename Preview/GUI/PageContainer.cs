@@ -39,7 +39,7 @@ namespace Mochi.Unity.Preview.GUI
             return PushCoreAsync<TPage>(
                 key,
                 cancellationToken => PanelFactory.CreateAsync<TPage, TData>(
-                    Loader, key, transform, null, data, cancellationToken));
+                    Loader, key, transform, data, cancellationToken));
         }
 
         //Busy 仅覆盖加载+Prepare+逻辑提交，过渡由 Panel fire-and-forget，容器不等待

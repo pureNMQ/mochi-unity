@@ -9,7 +9,7 @@ using UnityEngine.TestTools;
 
 namespace Mochi.Unity.Preview.GUI.Tests
 {
-    //工厂契约用例：CreateAsync 完成到 OnOpen 的全部流程（configure→Prepare→OnOpen），实例保持失活；
+    //工厂契约用例：CreateAsync 完成到 OnOpen 的全部流程（Prepare→OnOpen），实例保持失活；
     //加载失败或缺组件返回 null；Prepare 抛错/取消由工厂收尾后原样上抛
     public class PanelFactoryTests
     {
@@ -53,27 +53,18 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Create_RunsConfigureThenPrepareThenOpen_InOrder()
+        public IEnumerator Create_RunsPrepareThenOpen_InOrder()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 GameObject prefab = Track(CreatePrefab<FactoryPage>("FactoryPrefab", active: true));
                 CountingLoader loader = new CountingLoader(prefab);
                 Transform parent = Track(new GameObject("Parent")).transform;
-                List<string> order = new List<string>();
 
                 FactoryPage panel = await PanelFactory.CreateAsync<FactoryPage>(
-                    loader,
-                    "key",
-                    parent,
-                    candidate =>
-                    {
-                        candidate.Order = order;
-                        order.Add("configure");
-                    },
-                    CancellationToken.None);
+                    loader, "key", parent, CancellationToken.None);
 
-                Assert.That(order, Is.EqualTo(new[] { "configure", "prepare", "open" }));
+                Assert.That(panel.Order, Is.EqualTo(new[] { "prepare", "open" }));
                 Assert.That(panel.IsOpen, Is.True);
             });
         }
@@ -203,20 +194,20 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
         private class FactoryPage : Panel
         {
-            public List<string> Order { get; set; }
+            public List<string> Order { get; } = new List<string>();
             public int OpenCount { get; private set; }
             public int CloseCount { get; private set; }
 
             protected override UniTask OnPrepareAsync(CancellationToken cancellationToken)
             {
-                Order?.Add("prepare");
+                Order.Add("prepare");
                 return UniTask.CompletedTask;
             }
 
             protected override void OnOpen()
             {
                 OpenCount++;
-                Order?.Add("open");
+                Order.Add("open");
             }
 
             protected override void OnClose()
