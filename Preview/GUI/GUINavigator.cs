@@ -1,4 +1,7 @@
+using System;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
 namespace Mochi.Unity.Preview.GUI
@@ -22,7 +25,7 @@ namespace Mochi.Unity.Preview.GUI
         //仅在 Awake/Initialize 建立过根 Layer 的导航器才启用属性重建；重复导航器保持 null
         private bool rootsCreated;
 
-        public static GUINavigator Instance => instance;
+        public static GUINavigator Instance => instance != null ? instance : CreateDefaultInstance();
 
         //根 Layer 被销毁时按需自动重建;
         public PageContainer Pages => EnsureLayer(ref pages, PageContainerObjectName, 1);
@@ -73,6 +76,31 @@ namespace Mochi.Unity.Preview.GUI
             modals.Show();
             notifications.Show();
             rootsCreated = true;
+        }
+
+        //懒创建：业务首次访问时自建常驻导航器，不使用 UI 的场景永不创建
+        private static GUINavigator CreateDefaultInstance()
+        {
+            GameObject root = new GameObject("GUINavigator");
+            DontDestroyOnLoad(root);
+            GUINavigator navigator = root.AddComponent<GUINavigator>();
+            navigator.Initialize(new AddressablesPanelLoader());
+            //兜底仅限懒创建路径：显式安装的场景（含测试）自备 EventSystem，避免双实例抢占 current
+            EnsureEventSystem();
+            return navigator;
+        }
+
+        //复用场景已有 EventSystem，仅缺失时兜底创建
+        private static void EnsureEventSystem()
+        {
+            if (EventSystem.current != null)
+            {
+                return;
+            }
+
+            GameObject eventSystemObject = new GameObject("EventSystem");
+            eventSystemObject.AddComponent<EventSystem>();
+            eventSystemObject.AddComponent<InputSystemUIInputModule>();
         }
 
         //根 Layer 存活检查与自动重建：销毁后以原名重建、回到原排序位，
@@ -152,6 +180,8 @@ namespace Mochi.Unity.Preview.GUI
             {
                 instance = null;
             }
+
+            (rootLoader as IDisposable)?.Dispose();
         }
 
     }
