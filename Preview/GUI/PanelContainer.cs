@@ -36,7 +36,6 @@ namespace Mochi.Unity.Preview.GUI
             loader = panelLoader;
         }
 
-        //生命周期 Token 由具体容器持有，基类经抽象成员访问
         protected abstract CancellationToken LifetimeCancellationToken { get; }
 
         protected override void OnDestroy()
