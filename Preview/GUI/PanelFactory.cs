@@ -7,7 +7,6 @@ using Object = UnityEngine.Object;
 
 namespace Mochi.Unity.Preview.GUI
 {
-    //工厂只负责构造到 OnOpen；容器所有权绑定（如 Modal 的 Bind）由调用方在返回后完成
     public static class PanelFactory
     {
         public static UniTask<TPanel> CreateAsync<TPanel>(
