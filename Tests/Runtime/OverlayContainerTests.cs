@@ -152,14 +152,14 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 GUINavigator navigator = root.AddComponent<GUINavigator>();
                 navigator.Initialize(new NullLoader());
 
-                //根 Layer 顺序：Page → Modal → HUD → Notification（同层级按兄弟索引排序）
+                //根 Layer 顺序：HUD → Page → Modal → Notification（同层级按兄弟索引排序）
                 Assert.That(navigator.HUD, Is.Not.Null);
                 Assert.That(navigator.Notifications, Is.Not.Null);
                 Assert.That(navigator.HUD.transform.parent, Is.SameAs(navigator.Pages.transform.parent));
                 string[] siblingNames = GetSiblingNames(navigator.Pages.transform.parent);
                 Assert.That(siblingNames, Is.EqualTo(new[]
                 {
-                    "PageContainer", "ModalContainer", "HUDLayer", "NotificationLayer"
+                    "HUDLayer", "PageContainer", "ModalContainer", "NotificationLayer"
                 }));
 
                 //两个根 Layer 各持一个实例，互不共享登记
@@ -187,7 +187,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 OverlayContainer rebuilt = navigator.HUD;
                 Assert.That(rebuilt, Is.Not.Null);
                 Assert.That(rebuilt, Is.Not.SameAs(original));
-                Assert.That(rebuilt.transform.GetSiblingIndex(), Is.EqualTo(2));
+                Assert.That(rebuilt.transform.GetSiblingIndex(), Is.EqualTo(0));
 
                 OverlayPanel panel = await rebuilt.OpenAsync<OverlayPanel>("hud");
                 Assert.That(panel, Is.Not.Null);
