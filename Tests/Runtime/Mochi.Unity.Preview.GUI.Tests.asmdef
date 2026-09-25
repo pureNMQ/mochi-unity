@@ -2,6 +2,8 @@
     "name": "Mochi.Unity.Preview.GUI.Tests",
     "rootNamespace": "Mochi.Unity.Preview.GUI.Tests",
     "references": [
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner",
         "Mochi",
         "Mochi.Unity",
         "UniTask",
@@ -9,9 +11,6 @@
         "Unity.ResourceManager",
         "Unity.TextMeshPro",
         "UnityEngine.UI"
-    ],
-    "optionalUnityReferences": [
-        "TestAssemblies"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

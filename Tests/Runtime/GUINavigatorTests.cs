@@ -3,8 +3,11 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using Object = UnityEngine.Object;
 
 namespace Mochi.Unity.Preview.GUI.Tests
 {
@@ -80,6 +83,65 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 UnityEngine.Object.DestroyImmediate(firstRoot);
                 UnityEngine.Object.DestroyImmediate(duplicateRoot);
             }
+        }
+
+        [UnityTest]
+        public IEnumerator LazyCreation_EventSystemSurvivesOwnerSceneUnload()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GUINavigator leftoverNavigator = Object.FindFirstObjectByType<GUINavigator>();
+                if (leftoverNavigator != null)
+                {
+                    Object.DestroyImmediate(leftoverNavigator.gameObject);
+                }
+
+                foreach (EventSystem leftoverEventSystem in Object.FindObjectsByType<EventSystem>(
+                             FindObjectsSortMode.None))
+                {
+                    Object.DestroyImmediate(leftoverEventSystem.gameObject);
+                }
+
+                Scene ownerScene = SceneManager.CreateScene("LazyEventSystemOwnerScene");
+                SceneManager.SetActiveScene(ownerScene);
+                try
+                {
+                    _ = GUINavigator.Instance;
+                    EventSystem eventSystem = EventSystem.current;
+                    Assert.That(eventSystem, Is.Not.Null);
+
+                    AsyncOperation unload = SceneManager.UnloadSceneAsync(ownerScene);
+                    while (!unload.isDone)
+                    {
+                        await UniTask.Yield();
+                    }
+
+                    await UniTask.Yield();
+                    //兜底 EventSystem 若留在创建时刻的 Active Scene，会随该场景卸载销毁，
+                    //此后 GUINavigator 仍在但 UI 输入静默失效
+                    Assert.That(eventSystem != null, Is.True);
+                    Assert.That(EventSystem.current != null, Is.True);
+                }
+                finally
+                {
+                    if (ownerScene.isLoaded)
+                    {
+                        SceneManager.UnloadSceneAsync(ownerScene);
+                    }
+
+                    GUINavigator lazyNavigator = Object.FindFirstObjectByType<GUINavigator>();
+                    if (lazyNavigator != null)
+                    {
+                        Object.DestroyImmediate(lazyNavigator.gameObject);
+                    }
+
+                    EventSystem lazyEventSystem = Object.FindFirstObjectByType<EventSystem>();
+                    if (lazyEventSystem != null)
+                    {
+                        Object.DestroyImmediate(lazyEventSystem.gameObject);
+                    }
+                }
+            });
         }
 
         private sealed class FakeLoader : IPanelLoader

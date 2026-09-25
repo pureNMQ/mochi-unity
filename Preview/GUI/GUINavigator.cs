@@ -99,6 +99,9 @@ namespace Mochi.Unity.Preview.GUI
             }
 
             GameObject eventSystemObject = new GameObject("EventSystem");
+            //兜底 EventSystem 必须与懒创建的导航器同寿命：它创建于访问那一刻的 Active Scene，
+            //若留在该场景里，场景卸载后导航器仍在而 UI 输入静默失效
+            DontDestroyOnLoad(eventSystemObject);
             eventSystemObject.AddComponent<EventSystem>();
             eventSystemObject.AddComponent<InputSystemUIInputModule>();
         }
