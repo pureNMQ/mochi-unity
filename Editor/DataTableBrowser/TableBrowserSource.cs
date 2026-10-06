@@ -40,6 +40,20 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             Path = path ?? throw new ArgumentNullException(nameof(path));
             StorageKind = storageKind;
             this.displayName = string.IsNullOrEmpty(displayName) ? definition.TableName : displayName;
+            EnumFields = CollectEnumFields(typeof(TValue));
+        }
+
+        private static IReadOnlyDictionary<string, string[]> CollectEnumFields(Type rowType)
+        {
+            var map = new Dictionary<string, string[]>();
+            foreach (FieldInfo field in rowType.GetFields(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (field.FieldType.IsEnum)
+                {
+                    map[field.Name] = Enum.GetNames(field.FieldType);
+                }
+            }
+            return map;
         }
 
         /// <summary>表名。</summary>
@@ -59,6 +73,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         /// <summary>跨表引用声明。</summary>
         public IReadOnlyList<TableReference> References => definition.References;
+
+        /// <summary>枚举字段元数据;构造时从行类型的公共枚举字段反射生成。</summary>
+        public IReadOnlyDictionary<string, string[]> EnumFields { get; }
 
         /// <summary>从磁盘读取全部行;文件不可读或结构不符时抛出异常。</summary>
         /// <exception cref="InvalidOperationException">文件内容不是声明形状要求的 JSON 结构。</exception>

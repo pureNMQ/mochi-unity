@@ -49,7 +49,29 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             public string LoadError;
             public readonly List<TableEditError> Errors = new List<TableEditError>();
             public readonly List<string> ReferenceFields = new List<string>();
+            public readonly Dictionary<string, string[]> EnumFields = new Dictionary<string, string[]>();
             public readonly GridView View = new GridView();
+        }
+
+        private sealed class ComboboxOption
+        {
+            public string Value;
+            public string Display;
+            public bool Committable;
+        }
+
+        private sealed class ComboboxState
+        {
+            public string ControlName;
+            public int TableIndex;
+            public int StorageIndex;
+            public string Field;
+            public JObject Row;
+            public string OriginalValue;
+            public string TypedText;
+            public List<ComboboxOption> Options;
+            public List<ComboboxOption> Filtered;
+            public int ActiveIndex;
         }
 
         private readonly List<TableWorkspace> workspaces = new List<TableWorkspace>();
@@ -61,6 +83,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         //同一焦点期内的后续击键不再重复压栈;焦点移出即结束会话
         private string focusedCellControl = "";
         private bool undoPushedForFocusSession;
+        private ComboboxState combobox;
 
         /// <summary>打开数据表浏览器窗口(菜单 Mochi/Data Table Browser)。</summary>
         [MenuItem("Mochi/Data Table Browser")]
@@ -73,6 +96,21 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         {
             minSize = new Vector2(720f, 400f);
             ReloadAll();
+            if (workspaces.Count == 0)
+            {
+                //域重载后 OnEnable 可能早于 TypeCache 就绪执行,目录类型查不到会误报空目录;编辑器稳定后补载一次
+                EditorApplication.delayCall += ReloadIfStillEmpty;
+            }
+        }
+
+        private void ReloadIfStillEmpty()
+        {
+            if (this == null || workspaces.Count > 0)
+            {
+                return;
+            }
+            ReloadAll();
+            Repaint();
         }
 
         private void OnSelectionChange()
@@ -85,6 +123,8 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         {
             TrackFocusSession();
             HandleUndoRedoKeys();
+            UpdateComboboxForFocus(CurrentTable);
+            HandleComboboxKeys();
             DrawToolbar();
 
             TableWorkspace workspace = CurrentTable;
@@ -223,7 +263,13 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             DrawHeaderRow(workspace);
             for (int viewIndex = 0; viewIndex < visibleRows.Count; viewIndex++)
             {
-                DrawDataRow(workspace, visibleRows[viewIndex], viewIndex);
+                int storageIndex = visibleRows[viewIndex];
+                DrawDataRow(workspace, storageIndex, viewIndex);
+                if (combobox != null && combobox.TableIndex == displayedTable &&
+                    combobox.StorageIndex == storageIndex)
+                {
+                    DrawComboboxDropdown(workspace);
+                }
             }
             if (workspace.Rows.Count == 0)
             {
@@ -345,14 +391,16 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
 
             List<string> cellErrors = FindCellErrors(workspace, row, field);
-            if (cellErrors != null)
+            bool enumInvalid = IsInvalidEnumValue(workspace, field, value);
+            if (cellErrors != null || enumInvalid)
             {
                 EditorGUI.DrawRect(cellRect, ErrorCellColor);
             }
 
-            if (workspace.ReferenceFields.Contains(field) && value.Type != JTokenType.Array)
+            if (value.Type != JTokenType.Array &&
+                (workspace.EnumFields.ContainsKey(field) || workspace.ReferenceFields.Contains(field)))
             {
-                DrawReferenceCell(workspace, row, field, value, cellRect);
+                DrawComboboxCell(workspace, row, field, cellRect);
             }
             else
             {
@@ -381,10 +429,19 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 }
             }
 
-            if (cellErrors != null)
+            if (cellErrors != null || enumInvalid)
             {
+                var messages = new List<string>();
+                if (cellErrors != null)
+                {
+                    messages.AddRange(cellErrors);
+                }
+                if (enumInvalid)
+                {
+                    messages.Add("非法枚举名 " + value + ",不在合法值列表内。");
+                }
                 UnityEngine.GUI.Label(
-                    cellRect, new GUIContent("", string.Join("\n", cellErrors.ToArray())));
+                    cellRect, new GUIContent("", string.Join("\n", messages.ToArray())));
             }
         }
 
@@ -436,33 +493,213 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
         }
 
-        private void DrawReferenceCell(TableWorkspace workspace, JObject row, string field, JToken value, Rect cellRect)
+        private void DrawComboboxCell(TableWorkspace workspace, JObject row, string field, Rect cellRect)
         {
-            TableReference reference = workspace.Source.References.First(item => item.FieldName == field);
-            List<string> targetIds = ResolveTargetIds(reference.TargetTableName);
-            string current = value.Type == JTokenType.Null ? "" : value.ToString();
-
-            List<string> display = new List<string>(targetIds);
-            if (!string.IsNullOrEmpty(current) && !display.Contains(current))
-            {
-                //悬空值保留在选项首位,避免下拉打开即丢失当前值;非法性仍由校验错误标红负责
-                display.Insert(0, current + " (不存在)");
-                targetIds = new List<string> { current }.Concat(targetIds).ToList();
-            }
-            int index = targetIds.IndexOf(current);
-            if (index < 0)
-            {
-                index = 0;
-            }
-
+            bool active = combobox != null && combobox.TableIndex == displayedTable &&
+                combobox.Field == field && combobox.Row == row;
+            string shown = active ? combobox.TypedText : ReadCellText(row, field);
             EditorGUI.BeginChangeCheck();
-            int selected = EditorGUI.Popup(cellRect, index, display.ToArray());
-            if (EditorGUI.EndChangeCheck() && selected >= 0 && selected < targetIds.Count)
+            string typed = EditorGUI.TextField(cellRect, shown);
+            if (EditorGUI.EndChangeCheck() && active)
             {
-                PushUndoOncePerFocusSession(workspace);
-                row[field] = targetIds[selected];
-                MarkEdited(workspace);
+                //击键只进输入缓冲参与过滤;模型写入只发生在提交有效选项时
+                combobox.TypedText = typed;
             }
+        }
+
+        private void UpdateComboboxForFocus(TableWorkspace workspace)
+        {
+            if (combobox != null && focusedCellControl != combobox.ControlName)
+            {
+                combobox = null;
+            }
+            if (combobox != null || workspace == null || !focusedCellControl.StartsWith("cell_"))
+            {
+                return;
+            }
+            string[] parts = focusedCellControl.Split('_');
+            if (parts.Length != 4 ||
+                !int.TryParse(parts[1], out int tableIndex) || tableIndex != displayedTable ||
+                !int.TryParse(parts[2], out int column) || column >= workspace.View.Columns.Count ||
+                !int.TryParse(parts[3], out int storageIndex) ||
+                storageIndex < 0 || storageIndex >= workspace.Rows.Count)
+            {
+                return;
+            }
+            string field = workspace.View.Columns[column];
+            if (!workspace.EnumFields.ContainsKey(field) && !workspace.ReferenceFields.Contains(field))
+            {
+                return;
+            }
+            OpenCombobox(workspace, tableIndex, column, storageIndex, field);
+        }
+
+        private void OpenCombobox(
+            TableWorkspace workspace, int tableIndex, int column, int storageIndex, string field)
+        {
+            var row = (JObject)workspace.Rows[storageIndex];
+            string current = ReadCellText(row, field);
+            var options = new List<ComboboxOption>();
+            if (workspace.EnumFields.TryGetValue(field, out string[] names))
+            {
+                foreach (string name in names)
+                {
+                    options.Add(new ComboboxOption { Value = name, Display = name, Committable = true });
+                }
+            }
+            else
+            {
+                TableReference reference = workspace.Source.References.First(item => item.FieldName == field);
+                foreach (string id in ResolveTargetIds(reference.TargetTableName))
+                {
+                    options.Add(new ComboboxOption { Value = id, Display = id, Committable = true });
+                }
+            }
+            if (!string.IsNullOrEmpty(current) && options.All(option => option.Value != current))
+            {
+                //存量悬空/非法值仅作展示项,不可经提交固化
+                options.Insert(0, new ComboboxOption
+                {
+                    Value = current,
+                    Display = current + " (当前值,不可提交)",
+                    Committable = false
+                });
+            }
+            combobox = new ComboboxState
+            {
+                ControlName = CellControlName(tableIndex, column, storageIndex),
+                TableIndex = tableIndex,
+                StorageIndex = storageIndex,
+                Field = field,
+                Row = row,
+                OriginalValue = current,
+                TypedText = current,
+                Options = options,
+                Filtered = new List<ComboboxOption>(options)
+            };
+        }
+
+        private void DrawComboboxDropdown(TableWorkspace workspace)
+        {
+            combobox.Filtered = combobox.Options
+                .Where(option => string.IsNullOrEmpty(combobox.TypedText) ||
+                    option.Display.IndexOf(combobox.TypedText, StringComparison.OrdinalIgnoreCase) >= 0)
+                .ToList();
+            if (combobox.ActiveIndex >= combobox.Filtered.Count)
+            {
+                combobox.ActiveIndex = combobox.Filtered.Count - 1;
+            }
+            if (combobox.ActiveIndex < 0)
+            {
+                combobox.ActiveIndex = 0;
+            }
+
+            float height = combobox.Filtered.Count == 0
+                ? 22f
+                : Mathf.Min(160f, combobox.Filtered.Count * 20f + 4f);
+            Rect rect = GUILayoutUtility.GetRect(TotalGridWidth(workspace.View), height);
+            UnityEngine.GUI.Box(rect, "");
+            if (combobox.Filtered.Count == 0)
+            {
+                UnityEngine.GUI.Label(rect, "无匹配项", EditorStyles.miniLabel);
+                return;
+            }
+            for (int index = 0; index < combobox.Filtered.Count; index++)
+            {
+                ComboboxOption option = combobox.Filtered[index];
+                var optionRect = new Rect(rect.x + 2f, rect.y + 2f + index * 20f, rect.width - 4f, 20f);
+                using (new EditorGUI.DisabledScope(!option.Committable))
+                {
+                    if (UnityEngine.GUI.Button(
+                        optionRect,
+                        (index == combobox.ActiveIndex ? "> " : "") + option.Display,
+                        EditorStyles.miniButton))
+                    {
+                        CommitCombobox(workspace, option);
+                    }
+                }
+            }
+        }
+
+        private void HandleComboboxKeys()
+        {
+            if (combobox == null)
+            {
+                return;
+            }
+            UnityEngine.Event current = UnityEngine.Event.current;
+            if (current.type != EventType.KeyDown)
+            {
+                return;
+            }
+            if (current.keyCode == KeyCode.DownArrow)
+            {
+                combobox.ActiveIndex = Mathf.Min(
+                    combobox.ActiveIndex + 1, Mathf.Max(combobox.Filtered.Count - 1, 0));
+                current.Use();
+            }
+            else if (current.keyCode == KeyCode.UpArrow)
+            {
+                combobox.ActiveIndex = Mathf.Max(combobox.ActiveIndex - 1, 0);
+                current.Use();
+            }
+            else if (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter)
+            {
+                CommitActiveOption(CurrentTable);
+                current.Use();
+            }
+            else if (current.keyCode == KeyCode.Escape)
+            {
+                CloseComboboxWithRevert();
+                current.Use();
+            }
+        }
+
+        private void CommitActiveOption(TableWorkspace workspace)
+        {
+            if (workspace == null || combobox == null || combobox.Filtered.Count == 0)
+            {
+                return;
+            }
+            CommitCombobox(workspace,
+                combobox.Filtered[Mathf.Clamp(combobox.ActiveIndex, 0, combobox.Filtered.Count - 1)]);
+        }
+
+        private void CommitCombobox(TableWorkspace workspace, ComboboxOption option)
+        {
+            if (!option.Committable || option.Value == combobox.OriginalValue)
+            {
+                combobox.TypedText = option.Value;
+                return;
+            }
+            PushUndoOncePerFocusSession(workspace);
+            combobox.Row[combobox.Field] = option.Value;
+            combobox.OriginalValue = option.Value;
+            combobox.TypedText = option.Value;
+            MarkEdited(workspace);
+        }
+
+        private void CloseComboboxWithRevert()
+        {
+            combobox = null;
+            UnityEngine.GUI.FocusControl(null);
+        }
+
+        private static string ReadCellText(JObject row, string field)
+        {
+            JToken token = row[field];
+            if (token == null || token.Type == JTokenType.Null)
+            {
+                return "";
+            }
+            return token.ToString();
+        }
+
+        private static bool IsInvalidEnumValue(TableWorkspace workspace, string field, JToken value)
+        {
+            return workspace.EnumFields.TryGetValue(field, out string[] names) &&
+                (value.Type == JTokenType.String || value.Type == JTokenType.Null) &&
+                !names.Contains(value.ToString(), StringComparer.OrdinalIgnoreCase);
         }
 
         private void DrawArrayCell(
@@ -683,6 +920,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             UnityEngine.GUI.FocusControl(null);
             focusedCellControl = "";
             undoPushedForFocusSession = false;
+            combobox = null;
             workspace.View.SelectedRow = -1;
             RebuildColumns(workspace);
             MarkEdited(workspace);
@@ -894,6 +1132,10 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                     var workspace = new TableWorkspace { Source = source };
                     workspace.ReferenceFields.AddRange(
                         source.References.Select(reference => reference.FieldName).Distinct());
+                    foreach (var pair in source.EnumFields)
+                    {
+                        workspace.EnumFields[pair.Key] = pair.Value;
+                    }
                     try
                     {
                         workspace.Rows = source.LoadRows();
