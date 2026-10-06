@@ -4,6 +4,7 @@ using System.Linq;
 using Mochi.DataTable;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
+using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
 namespace Mochi.Unity.Editor.DataTableBrowser
@@ -53,27 +54,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             public readonly GridView View = new GridView();
         }
 
-        private sealed class ComboboxOption
-        {
-            public string Value;
-            public string Display;
-            public bool Committable;
-        }
-
-        private sealed class ComboboxState
-        {
-            public string ControlName;
-            public int TableIndex;
-            public int StorageIndex;
-            public string Field;
-            public JObject Row;
-            public string OriginalValue;
-            public string TypedText;
-            public List<ComboboxOption> Options;
-            public List<ComboboxOption> Filtered;
-            public int ActiveIndex;
-        }
-
         private readonly List<TableWorkspace> workspaces = new List<TableWorkspace>();
         private TableKeySetResolver keyResolver = new TableKeySetResolver();
         private int displayedTable = -1;
@@ -83,7 +63,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         //同一焦点期内的后续击键不再重复压栈;焦点移出即结束会话
         private string focusedCellControl = "";
         private bool undoPushedForFocusSession;
-        private ComboboxState combobox;
 
         /// <summary>打开数据表浏览器窗口(菜单 Mochi/Data Table Browser)。</summary>
         [MenuItem("Mochi/Data Table Browser")]
@@ -123,8 +102,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         {
             TrackFocusSession();
             HandleUndoRedoKeys();
-            UpdateComboboxForFocus(CurrentTable);
-            HandleComboboxKeys();
             DrawToolbar();
 
             TableWorkspace workspace = CurrentTable;
@@ -263,13 +240,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             DrawHeaderRow(workspace);
             for (int viewIndex = 0; viewIndex < visibleRows.Count; viewIndex++)
             {
-                int storageIndex = visibleRows[viewIndex];
-                DrawDataRow(workspace, storageIndex, viewIndex);
-                if (combobox != null && combobox.TableIndex == displayedTable &&
-                    combobox.StorageIndex == storageIndex)
-                {
-                    DrawComboboxDropdown(workspace);
-                }
+                DrawDataRow(workspace, visibleRows[viewIndex], viewIndex);
             }
             if (workspace.Rows.Count == 0)
             {
@@ -495,56 +466,22 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void DrawComboboxCell(TableWorkspace workspace, JObject row, string field, Rect cellRect)
         {
-            bool active = combobox != null && combobox.TableIndex == displayedTable &&
-                combobox.Field == field && combobox.Row == row;
-            string shown = active ? combobox.TypedText : ReadCellText(row, field);
-            EditorGUI.BeginChangeCheck();
-            string typed = EditorGUI.TextField(cellRect, shown);
-            if (EditorGUI.EndChangeCheck() && active)
-            {
-                //击键只进输入缓冲参与过滤;模型写入只发生在提交有效选项时
-                combobox.TypedText = typed;
-            }
-        }
-
-        private void UpdateComboboxForFocus(TableWorkspace workspace)
-        {
-            if (combobox != null && focusedCellControl != combobox.ControlName)
-            {
-                combobox = null;
-            }
-            if (combobox != null || workspace == null || !focusedCellControl.StartsWith("cell_"))
-            {
-                return;
-            }
-            string[] parts = focusedCellControl.Split('_');
-            if (parts.Length != 4 ||
-                !int.TryParse(parts[1], out int tableIndex) || tableIndex != displayedTable ||
-                !int.TryParse(parts[2], out int column) || column >= workspace.View.Columns.Count ||
-                !int.TryParse(parts[3], out int storageIndex) ||
-                storageIndex < 0 || storageIndex >= workspace.Rows.Count)
-            {
-                return;
-            }
-            string field = workspace.View.Columns[column];
-            if (!workspace.EnumFields.ContainsKey(field) && !workspace.ReferenceFields.Contains(field))
-            {
-                return;
-            }
-            OpenCombobox(workspace, tableIndex, column, storageIndex, field);
-        }
-
-        private void OpenCombobox(
-            TableWorkspace workspace, int tableIndex, int column, int storageIndex, string field)
-        {
-            var row = (JObject)workspace.Rows[storageIndex];
             string current = ReadCellText(row, field);
-            var options = new List<ComboboxOption>();
+            if (UnityEngine.GUI.Button(
+                    cellRect, string.IsNullOrEmpty(current) ? "(空)" : current, EditorStyles.popup))
+            {
+                OpenValueDropdown(workspace, row, field, cellRect);
+            }
+        }
+
+        private void OpenValueDropdown(TableWorkspace workspace, JObject row, string field, Rect cellRect)
+        {
+            var options = new List<(string Value, bool Enabled)>();
             if (workspace.EnumFields.TryGetValue(field, out string[] names))
             {
                 foreach (string name in names)
                 {
-                    options.Add(new ComboboxOption { Value = name, Display = name, Committable = true });
+                    options.Add((name, true));
                 }
             }
             else
@@ -552,137 +489,32 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 TableReference reference = workspace.Source.References.First(item => item.FieldName == field);
                 foreach (string id in ResolveTargetIds(reference.TargetTableName))
                 {
-                    options.Add(new ComboboxOption { Value = id, Display = id, Committable = true });
+                    options.Add((id, true));
                 }
             }
+            string current = ReadCellText(row, field);
             if (!string.IsNullOrEmpty(current) && options.All(option => option.Value != current))
             {
-                //存量悬空/非法值仅作展示项,不可经提交固化
-                options.Insert(0, new ComboboxOption
-                {
-                    Value = current,
-                    Display = current + " (当前值,不可提交)",
-                    Committable = false
-                });
+                //存量悬空/非法值仅作展示项,不可选中
+                options.Insert(0, (current + " (当前值,不存在)", false));
             }
-            combobox = new ComboboxState
-            {
-                ControlName = CellControlName(tableIndex, column, storageIndex),
-                TableIndex = tableIndex,
-                StorageIndex = storageIndex,
-                Field = field,
-                Row = row,
-                OriginalValue = current,
-                TypedText = current,
-                Options = options,
-                Filtered = new List<ComboboxOption>(options)
-            };
+            var dropdown = new TableValueDropdown(
+                new AdvancedDropdownState(),
+                workspace.Source.DisplayName + "." + field,
+                options,
+                value => CommitDropdownSelection(workspace, row, field, value));
+            dropdown.Show(cellRect);
         }
 
-        private void DrawComboboxDropdown(TableWorkspace workspace)
+        private void CommitDropdownSelection(TableWorkspace workspace, JObject row, string field, string value)
         {
-            combobox.Filtered = combobox.Options
-                .Where(option => string.IsNullOrEmpty(combobox.TypedText) ||
-                    option.Display.IndexOf(combobox.TypedText, StringComparison.OrdinalIgnoreCase) >= 0)
-                .ToList();
-            if (combobox.ActiveIndex >= combobox.Filtered.Count)
-            {
-                combobox.ActiveIndex = combobox.Filtered.Count - 1;
-            }
-            if (combobox.ActiveIndex < 0)
-            {
-                combobox.ActiveIndex = 0;
-            }
-
-            float height = combobox.Filtered.Count == 0
-                ? 22f
-                : Mathf.Min(160f, combobox.Filtered.Count * 20f + 4f);
-            Rect rect = GUILayoutUtility.GetRect(TotalGridWidth(workspace.View), height);
-            UnityEngine.GUI.Box(rect, "");
-            if (combobox.Filtered.Count == 0)
-            {
-                UnityEngine.GUI.Label(rect, "无匹配项", EditorStyles.miniLabel);
-                return;
-            }
-            for (int index = 0; index < combobox.Filtered.Count; index++)
-            {
-                ComboboxOption option = combobox.Filtered[index];
-                var optionRect = new Rect(rect.x + 2f, rect.y + 2f + index * 20f, rect.width - 4f, 20f);
-                using (new EditorGUI.DisabledScope(!option.Committable))
-                {
-                    if (UnityEngine.GUI.Button(
-                        optionRect,
-                        (index == combobox.ActiveIndex ? "> " : "") + option.Display,
-                        EditorStyles.miniButton))
-                    {
-                        CommitCombobox(workspace, option);
-                    }
-                }
-            }
-        }
-
-        private void HandleComboboxKeys()
-        {
-            if (combobox == null)
+            if (value == ReadCellText(row, field))
             {
                 return;
             }
-            UnityEngine.Event current = UnityEngine.Event.current;
-            if (current.type != EventType.KeyDown)
-            {
-                return;
-            }
-            if (current.keyCode == KeyCode.DownArrow)
-            {
-                combobox.ActiveIndex = Mathf.Min(
-                    combobox.ActiveIndex + 1, Mathf.Max(combobox.Filtered.Count - 1, 0));
-                current.Use();
-            }
-            else if (current.keyCode == KeyCode.UpArrow)
-            {
-                combobox.ActiveIndex = Mathf.Max(combobox.ActiveIndex - 1, 0);
-                current.Use();
-            }
-            else if (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter)
-            {
-                CommitActiveOption(CurrentTable);
-                current.Use();
-            }
-            else if (current.keyCode == KeyCode.Escape)
-            {
-                CloseComboboxWithRevert();
-                current.Use();
-            }
-        }
-
-        private void CommitActiveOption(TableWorkspace workspace)
-        {
-            if (workspace == null || combobox == null || combobox.Filtered.Count == 0)
-            {
-                return;
-            }
-            CommitCombobox(workspace,
-                combobox.Filtered[Mathf.Clamp(combobox.ActiveIndex, 0, combobox.Filtered.Count - 1)]);
-        }
-
-        private void CommitCombobox(TableWorkspace workspace, ComboboxOption option)
-        {
-            if (!option.Committable || option.Value == combobox.OriginalValue)
-            {
-                combobox.TypedText = option.Value;
-                return;
-            }
-            PushUndoOncePerFocusSession(workspace);
-            combobox.Row[combobox.Field] = option.Value;
-            combobox.OriginalValue = option.Value;
-            combobox.TypedText = option.Value;
+            PushUndoSnapshot(workspace);
+            row[field] = value;
             MarkEdited(workspace);
-        }
-
-        private void CloseComboboxWithRevert()
-        {
-            combobox = null;
-            UnityEngine.GUI.FocusControl(null);
         }
 
         private static string ReadCellText(JObject row, string field)
@@ -920,7 +752,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             UnityEngine.GUI.FocusControl(null);
             focusedCellControl = "";
             undoPushedForFocusSession = false;
-            combobox = null;
             workspace.View.SelectedRow = -1;
             RebuildColumns(workspace);
             MarkEdited(workspace);
