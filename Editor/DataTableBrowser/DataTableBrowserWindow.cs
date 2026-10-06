@@ -803,8 +803,10 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         private void HandleSelectionChanged()
         {
             int target = FindTableIndexForSelection();
-            if (target == displayedTable)
+            if (target == displayedTable || target < 0)
             {
+                //窗口只被选中的表文件牵引:空选或选中非表资产不抢已打开的表,
+                //提示态只在尚未打开任何表时出现
                 return;
             }
             TableWorkspace current = CurrentTable;
