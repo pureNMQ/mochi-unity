@@ -503,7 +503,10 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 workspace.Source.DisplayName + "." + field,
                 options,
                 value => CommitDropdownSelection(workspace, row, field, value));
-            dropdown.Show(cellRect);
+            //弹窗宽度跟随激活矩形,钳到固定区间避免贴到整个网格宽
+            var activator = new Rect(
+                cellRect.x, cellRect.y, Mathf.Clamp(cellRect.width, 200f, 360f), cellRect.height);
+            dropdown.Show(activator);
         }
 
         private void CommitDropdownSelection(TableWorkspace workspace, JObject row, string field, string value)

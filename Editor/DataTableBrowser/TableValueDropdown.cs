@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEditor.IMGUI.Controls;
+using UnityEngine;
 
 namespace Mochi.Unity.Editor.DataTableBrowser
 {
@@ -25,6 +26,8 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             this.title = title;
             this.options = options;
             this.onSelected = onSelected;
+            //窗口宽度跟随激活矩形,保底宽度防止窄单元格把弹窗挤得不可读
+            minimumSize = new Vector2(200f, 120f);
         }
 
         protected override AdvancedDropdownItem BuildRoot()
