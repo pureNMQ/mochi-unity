@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Mochi.DataTable;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -93,9 +94,36 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             serializer.Converters.Add(new StringEnumConverter());
 
             TValue instance = Activator.CreateInstance<TValue>();
+            FillNullReferenceFields(instance);
             JObject template = JObject.FromObject(instance, serializer);
             template[KeyFieldName] = "";
             return template;
+        }
+
+        /// <summary>
+        /// 把未赋值的引用类型可编辑字段换成空值载体(null 字符串换空串、null List 换空列表)。
+        /// null 经 JObject.FromObject 变成 JTokenType.Null,而浏览器字段编辑器对 null 只读,
+        /// 新条目模板若保留 null 会出现整字段不可编辑。
+        /// </summary>
+        private static void FillNullReferenceFields(object instance)
+        {
+            Type type = instance.GetType();
+            foreach (FieldInfo field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (field.GetValue(instance) != null)
+                {
+                    continue;
+                }
+                if (field.FieldType == typeof(string))
+                {
+                    field.SetValue(instance, "");
+                }
+                else if (field.FieldType.IsGenericType &&
+                    field.FieldType.GetGenericTypeDefinition() == typeof(List<>))
+                {
+                    field.SetValue(instance, Activator.CreateInstance(field.FieldType));
+                }
+            }
         }
 
         /// <summary>从行对象提取键的字符串形式;键缺失或为 null 时返回 null。</summary>

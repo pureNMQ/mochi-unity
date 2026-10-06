@@ -344,6 +344,17 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 case JTokenType.Array:
                     DrawStringArrayEditor(workspace, property);
                     break;
+                case JTokenType.Null:
+                    //显式 null 只出现在绕过模板手改的数据里;按字符串编辑兜底,
+                    //改过即成为字符串字段,非字符串形状的 null 会被改写,保存前校验会兜住后续问题
+                    EditorGUI.BeginChangeCheck();
+                    string nullText = EditorGUILayout.TextField("");
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        property.Value = nullText;
+                        MarkEdited(workspace);
+                    }
+                    break;
                 default:
                     EditorGUILayout.LabelField(
                         property.Value.ToString(Newtonsoft.Json.Formatting.Indented),
