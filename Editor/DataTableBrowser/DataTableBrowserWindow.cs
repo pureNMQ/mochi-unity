@@ -9,12 +9,38 @@ using UnityEngine;
 namespace Mochi.Unity.Editor.DataTableBrowser
 {
     /// <summary>
-    /// 通用数据表浏览器:列出表目录声明的全部表,提供条目新增、编辑、删除与保存,
-    /// 并在每次修改后对当前表即时执行编辑期校验(结构、跨表引用、领域规则)。
+    /// 通用数据表浏览器:内容跟随 Project 窗口当前选中的表文件,以类 Excel 网格呈现,
+    /// 列=表全部字段、行=条目、单元格直接编辑,支持列头排序、搜索过滤与撤销重做。
+    /// 磁盘读写与编辑期校验全部经 <see cref="ITableBrowserSource"/> 完成;
     /// 编辑中的未保存修改即时进入快照,参与其他表的引用解析。
     /// </summary>
     public sealed class DataTableBrowserWindow : EditorWindow
     {
+        private const float RowHeight = 22f;
+        private const float RowNumberColumnWidth = 46f;
+        private const int UndoCapacity = 100;
+
+        private static readonly Color AlternatingRowColor = new Color(0f, 0f, 0f, 0.05f);
+        private static readonly Color SelectedRowColor = new Color(0.3f, 0.5f, 0.85f, 0.2f);
+        private static readonly Color HeaderBackgroundColor = new Color(0f, 0f, 0f, 0.18f);
+        private static readonly Color ErrorCellColor = new Color(0.8f, 0.15f, 0.15f, 0.35f);
+
+        private static GUIStyle rowNumberStyle;
+
+        private sealed class GridView
+        {
+            public string Search = "";
+            public int SortColumn = -1;
+            public bool SortDescending;
+            public Vector2 Scroll;
+            public List<string> Columns = new List<string>();
+            public float[] ColumnWidths = Array.Empty<float>();
+            public int SelectedRow = -1;
+            public string PendingFocusCell;
+            public readonly List<JArray> UndoEntries = new List<JArray>();
+            public readonly List<JArray> RedoEntries = new List<JArray>();
+        }
+
         private sealed class TableWorkspace
         {
             public ITableBrowserSource Source;
@@ -22,16 +48,21 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             public bool Dirty;
             public string LoadError;
             public readonly List<TableEditError> Errors = new List<TableEditError>();
+            public readonly List<string> ReferenceFields = new List<string>();
+            public readonly GridView View = new GridView();
         }
 
         private readonly List<TableWorkspace> workspaces = new List<TableWorkspace>();
         private TableKeySetResolver keyResolver = new TableKeySetResolver();
-        private int selectedTable = -1;
-        private int selectedEntry = -1;
-        private Vector2 tableListScroll;
-        private Vector2 entryListScroll;
-        private Vector2 entryEditorScroll;
+        private int displayedTable = -1;
+        private Vector2 errorListScroll;
 
+        //单元格撤销以「焦点会话」为粒度:控件获得焦点后首次值变化压入一次快照,
+        //同一焦点期内的后续击键不再重复压栈;焦点移出即结束会话
+        private string focusedCellControl = "";
+        private bool undoPushedForFocusSession;
+
+        /// <summary>打开数据表浏览器窗口(菜单 Mochi/Data Table Browser)。</summary>
         [MenuItem("Mochi/Data Table Browser")]
         public static void Open()
         {
@@ -40,27 +71,136 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void OnEnable()
         {
+            minSize = new Vector2(720f, 400f);
             ReloadAll();
+        }
+
+        private void OnSelectionChange()
+        {
+            HandleSelectionChanged();
+            Repaint();
         }
 
         private void OnGUI()
         {
+            TrackFocusSession();
+            HandleUndoRedoKeys();
+            DrawToolbar();
+
+            TableWorkspace workspace = CurrentTable;
+            if (workspace == null)
+            {
+                DrawHint();
+                return;
+            }
+
+            DrawTableHeader(workspace);
+
+            if (workspace.LoadError != null)
+            {
+                EditorGUILayout.HelpBox("表文件读取失败: " + workspace.LoadError, MessageType.Error);
+                if (GUILayout.Button("重新载入"))
+                {
+                    ReloadAll();
+                }
+                return;
+            }
+
+            DrawGrid(workspace);
+            DrawErrorList(workspace);
+        }
+
+        private TableWorkspace CurrentTable =>
+            displayedTable >= 0 && displayedTable < workspaces.Count ? workspaces[displayedTable] : null;
+
+        private void TrackFocusSession()
+        {
+            string currentFocus = UnityEngine.GUI.GetNameOfFocusedControl();
+            if (currentFocus == focusedCellControl)
+            {
+                return;
+            }
+            focusedCellControl = currentFocus;
+            undoPushedForFocusSession = false;
+        }
+
+        private void HandleUndoRedoKeys()
+        {
+            //Mochi.Event 命名空间遮蔽 UnityEngine.Event,此处必须全限定
+            UnityEngine.Event current = UnityEngine.Event.current;
+            if (current.type != EventType.KeyDown || !(current.control || current.command))
+            {
+                return;
+            }
+            if (current.keyCode == KeyCode.Z)
+            {
+                UndoOne();
+                current.Use();
+            }
+            else if (current.keyCode == KeyCode.Y)
+            {
+                RedoOne();
+                current.Use();
+            }
+        }
+
+        private void DrawToolbar()
+        {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            TableWorkspace workspace = CurrentTable;
+            bool editable = workspace != null && workspace.LoadError == null;
+
+            using (new EditorGUI.DisabledScope(!editable))
+            {
+                if (GUILayout.Button("新增行", EditorStyles.toolbarButton))
+                {
+                    AddRow(workspace);
+                }
+                using (new EditorGUI.DisabledScope(workspace == null ||
+                    workspace.View.SelectedRow < 0 ||
+                    workspace.View.SelectedRow >= workspace.Rows.Count))
+                {
+                    if (GUILayout.Button("删除行", EditorStyles.toolbarButton))
+                    {
+                        DeleteSelectedRow(workspace);
+                    }
+                }
+                if (GUILayout.Button("保存当前表", EditorStyles.toolbarButton))
+                {
+                    SaveCurrentTable(workspace);
+                }
+                workspace.View.Search = EditorGUILayout.TextField(
+                    workspace.View.Search, EditorStyles.toolbarTextField, GUILayout.MinWidth(160f));
+            }
+
             if (GUILayout.Button("从磁盘重新载入", EditorStyles.toolbarButton))
             {
                 ReloadFromDiskWithConfirm();
             }
+
             GUILayout.FlexibleSpace();
-            TableWorkspace current = Current;
-            using (new EditorGUI.DisabledScope(current == null || current.LoadError != null))
+            if (workspace != null)
             {
-                if (GUILayout.Button("保存当前表", EditorStyles.toolbarButton))
-                {
-                    SaveCurrent();
-                }
+                string status = workspace.LoadError != null
+                    ? "读取失败"
+                    : (workspace.Dirty ? "* 未保存" : "已保存") +
+                        (workspace.Errors.Count > 0 ? "  |  校验错误 " + workspace.Errors.Count + " 条" : "");
+                EditorGUILayout.LabelField(status, EditorStyles.miniLabel);
             }
             EditorGUILayout.EndHorizontal();
+        }
 
+        private void DrawTableHeader(TableWorkspace workspace)
+        {
+            EditorGUILayout.LabelField(
+                workspace.Source.DisplayName + "  (" + workspace.Source.StorageKind + ")  条目 " +
+                workspace.Rows.Count + (workspace.Dirty ? "  未保存" : ""),
+                EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(workspace.Source.Path, EditorStyles.miniLabel);
+        }
+
+        private void DrawHint()
+        {
             if (workspaces.Count == 0)
             {
                 EditorGUILayout.HelpBox(
@@ -68,15 +208,653 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                     MessageType.Info);
                 return;
             }
-
-            EditorGUILayout.BeginHorizontal();
-            DrawTableList();
-            DrawTablePanel();
-            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.HelpBox(
+                "在 Project 窗口选中一个已声明的表文件,即可在此以网格打开该表:\n" +
+                string.Join("\n", workspaces.Select(item => "  " + item.Source.Path).ToArray()),
+                MessageType.Info);
         }
 
-        private TableWorkspace Current =>
-            selectedTable >= 0 && selectedTable < workspaces.Count ? workspaces[selectedTable] : null;
+        private void DrawGrid(TableWorkspace workspace)
+        {
+            ApplyPendingFocus(workspace);
+            List<int> visibleRows = ComputeVisibleRows(workspace);
+
+            workspace.View.Scroll = EditorGUILayout.BeginScrollView(workspace.View.Scroll, false, true);
+            DrawHeaderRow(workspace);
+            for (int viewIndex = 0; viewIndex < visibleRows.Count; viewIndex++)
+            {
+                DrawDataRow(workspace, visibleRows[viewIndex], viewIndex);
+            }
+            if (workspace.Rows.Count == 0)
+            {
+                EditorGUILayout.HelpBox("表为空。点击工具栏「新增行」添加条目。", MessageType.None);
+            }
+            else if (visibleRows.Count == 0)
+            {
+                EditorGUILayout.HelpBox("没有匹配搜索词的行。", MessageType.None);
+            }
+            EditorGUILayout.EndScrollView();
+            TrackFocusedRow(workspace);
+        }
+
+        private void ApplyPendingFocus(TableWorkspace workspace)
+        {
+            if (string.IsNullOrEmpty(workspace.View.PendingFocusCell))
+            {
+                return;
+            }
+            UnityEngine.GUI.FocusControl(workspace.View.PendingFocusCell);
+            EditorGUI.FocusTextInControl(workspace.View.PendingFocusCell);
+            workspace.View.PendingFocusCell = null;
+        }
+
+        private void DrawHeaderRow(TableWorkspace workspace)
+        {
+            GridView view = workspace.View;
+            Rect rect = GUILayoutUtility.GetRect(TotalGridWidth(view), RowHeight);
+            EditorGUI.DrawRect(rect, HeaderBackgroundColor);
+            UnityEngine.GUI.Label(
+                new Rect(rect.x, rect.y, RowNumberColumnWidth, rect.height), "#", RowNumberStyle);
+            float x = rect.x + RowNumberColumnWidth;
+            for (int column = 0; column < view.Columns.Count; column++)
+            {
+                var headerRect = new Rect(x, rect.y, view.ColumnWidths[column], rect.height);
+                string marker = view.SortColumn == column ? (view.SortDescending ? "  v" : "  ^") : "";
+                if (UnityEngine.GUI.Button(headerRect, view.Columns[column] + marker, EditorStyles.miniButton))
+                {
+                    if (view.SortColumn == column)
+                    {
+                        view.SortDescending = !view.SortDescending;
+                    }
+                    else
+                    {
+                        view.SortColumn = column;
+                        view.SortDescending = false;
+                    }
+                }
+                x += view.ColumnWidths[column];
+            }
+        }
+
+        private void DrawDataRow(TableWorkspace workspace, int storageIndex, int viewIndex)
+        {
+            GridView view = workspace.View;
+            var row = (JObject)workspace.Rows[storageIndex];
+            Rect rect = GUILayoutUtility.GetRect(TotalGridWidth(view), RowHeight);
+
+            if (view.SelectedRow == storageIndex)
+            {
+                EditorGUI.DrawRect(rect, SelectedRowColor);
+            }
+            else if (viewIndex % 2 == 1)
+            {
+                EditorGUI.DrawRect(rect, AlternatingRowColor);
+            }
+
+            Rect numberRect = new Rect(rect.x, rect.y, RowNumberColumnWidth, rect.height);
+            if (RowHasEntryLevelError(workspace, row, view))
+            {
+                EditorGUI.DrawRect(numberRect, ErrorCellColor);
+            }
+            UnityEngine.GUI.Label(numberRect, (viewIndex + 1).ToString(), RowNumberStyle);
+
+            float x = rect.x + RowNumberColumnWidth;
+            for (int column = 0; column < view.Columns.Count; column++)
+            {
+                var cellRect = new Rect(x, rect.y, view.ColumnWidths[column], rect.height);
+                DrawCell(workspace, displayedTable, row, storageIndex, column, view.Columns[column], cellRect);
+                x += view.ColumnWidths[column];
+            }
+        }
+
+        private static GUIStyle RowNumberStyle =>
+            rowNumberStyle ?? (rowNumberStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment = TextAnchor.MiddleCenter
+            });
+
+        private static float TotalGridWidth(GridView view)
+        {
+            return RowNumberColumnWidth + view.ColumnWidths.Sum();
+        }
+
+        private void DrawCell(
+            TableWorkspace workspace,
+            int tableIndex,
+            JObject row,
+            int storageIndex,
+            int column,
+            string field,
+            Rect cellRect)
+        {
+            UnityEngine.GUI.SetNextControlName(
+                CellControlName(tableIndex, column, storageIndex));
+            JToken value = row[field];
+            if (value == null)
+            {
+                //字段被手改数据整列删除时以空文本兜底,补上值后该行恢复完整字段
+                EditorGUI.BeginChangeCheck();
+                string restored = EditorGUI.TextField(cellRect, "");
+                if (EditorGUI.EndChangeCheck())
+                {
+                    PushUndoOncePerFocusSession(workspace);
+                    row[field] = restored;
+                    MarkEdited(workspace);
+                }
+                return;
+            }
+
+            List<string> cellErrors = FindCellErrors(workspace, row, field);
+            if (cellErrors != null)
+            {
+                EditorGUI.DrawRect(cellRect, ErrorCellColor);
+            }
+
+            if (workspace.ReferenceFields.Contains(field) && value.Type != JTokenType.Array)
+            {
+                DrawReferenceCell(workspace, row, field, value, cellRect);
+            }
+            else
+            {
+                switch (value.Type)
+                {
+                    case JTokenType.String:
+                    case JTokenType.Null:
+                        DrawTextCell(workspace, row, field,
+                            value.Type == JTokenType.Null ? "" : (string)value, cellRect);
+                        break;
+                    case JTokenType.Boolean:
+                        DrawBoolCell(workspace, row, field, (bool)value, cellRect);
+                        break;
+                    case JTokenType.Integer:
+                        DrawLongCell(workspace, row, field, (long)value, cellRect);
+                        break;
+                    case JTokenType.Float:
+                        DrawDoubleCell(workspace, row, field, (double)value, cellRect);
+                        break;
+                    case JTokenType.Array:
+                        DrawArrayCell(workspace, storageIndex, field, (JArray)value, cellRect);
+                        break;
+                    default:
+                        DrawReadOnlyCell(value, cellRect);
+                        break;
+                }
+            }
+
+            if (cellErrors != null)
+            {
+                UnityEngine.GUI.Label(
+                    cellRect, new GUIContent("", string.Join("\n", cellErrors.ToArray())));
+            }
+        }
+
+        private void DrawTextCell(TableWorkspace workspace, JObject row, string field, string current, Rect cellRect)
+        {
+            EditorGUI.BeginChangeCheck();
+            string text = EditorGUI.TextField(cellRect, current);
+            if (EditorGUI.EndChangeCheck())
+            {
+                PushUndoOncePerFocusSession(workspace);
+                row[field] = text;
+                MarkEdited(workspace);
+            }
+        }
+
+        private void DrawBoolCell(TableWorkspace workspace, JObject row, string field, bool current, Rect cellRect)
+        {
+            EditorGUI.BeginChangeCheck();
+            bool flag = EditorGUI.Toggle(cellRect, current);
+            if (EditorGUI.EndChangeCheck())
+            {
+                PushUndoOncePerFocusSession(workspace);
+                row[field] = flag;
+                MarkEdited(workspace);
+            }
+        }
+
+        private void DrawLongCell(TableWorkspace workspace, JObject row, string field, long current, Rect cellRect)
+        {
+            EditorGUI.BeginChangeCheck();
+            long integer = EditorGUI.LongField(cellRect, current);
+            if (EditorGUI.EndChangeCheck())
+            {
+                PushUndoOncePerFocusSession(workspace);
+                row[field] = integer;
+                MarkEdited(workspace);
+            }
+        }
+
+        private void DrawDoubleCell(TableWorkspace workspace, JObject row, string field, double current, Rect cellRect)
+        {
+            EditorGUI.BeginChangeCheck();
+            double real = EditorGUI.DoubleField(cellRect, current);
+            if (EditorGUI.EndChangeCheck())
+            {
+                PushUndoOncePerFocusSession(workspace);
+                row[field] = real;
+                MarkEdited(workspace);
+            }
+        }
+
+        private void DrawReferenceCell(TableWorkspace workspace, JObject row, string field, JToken value, Rect cellRect)
+        {
+            TableReference reference = workspace.Source.References.First(item => item.FieldName == field);
+            List<string> targetIds = ResolveTargetIds(reference.TargetTableName);
+            string current = value.Type == JTokenType.Null ? "" : value.ToString();
+
+            List<string> display = new List<string>(targetIds);
+            if (!string.IsNullOrEmpty(current) && !display.Contains(current))
+            {
+                //悬空值保留在选项首位,避免下拉打开即丢失当前值;非法性仍由校验错误标红负责
+                display.Insert(0, current + " (不存在)");
+                targetIds = new List<string> { current }.Concat(targetIds).ToList();
+            }
+            int index = targetIds.IndexOf(current);
+            if (index < 0)
+            {
+                index = 0;
+            }
+
+            EditorGUI.BeginChangeCheck();
+            int selected = EditorGUI.Popup(cellRect, index, display.ToArray());
+            if (EditorGUI.EndChangeCheck() && selected >= 0 && selected < targetIds.Count)
+            {
+                PushUndoOncePerFocusSession(workspace);
+                row[field] = targetIds[selected];
+                MarkEdited(workspace);
+            }
+        }
+
+        private void DrawArrayCell(
+            TableWorkspace workspace, int storageIndex, string field, JArray array, Rect cellRect)
+        {
+            if (UnityEngine.GUI.Button(cellRect, BuildArraySummary(array), EditorStyles.miniButton))
+            {
+                workspace.View.SelectedRow = storageIndex;
+                //弹窗内的多次修改以打开前的快照算作一步撤销,因此直接压栈而不走焦点会话
+                PushUndoSnapshot(workspace);
+                PopupWindow.Show(cellRect, new ArrayFieldEditPopup(array, () => MarkEdited(workspace)));
+            }
+        }
+
+        private static void DrawReadOnlyCell(JToken value, Rect cellRect)
+        {
+            string summary = value.ToString(Newtonsoft.Json.Formatting.None);
+            if (summary.Length > 80)
+            {
+                summary = summary.Substring(0, 80) + "...";
+            }
+            EditorGUI.LabelField(cellRect, summary, EditorStyles.miniLabel);
+        }
+
+        private static string BuildArraySummary(JArray array)
+        {
+            string joined = "[" + string.Join(", ", array
+                .Select(element => element.Type == JTokenType.Null
+                    ? "null"
+                    : element.ToString(Newtonsoft.Json.Formatting.None))
+                .ToArray()) + "]";
+            return joined.Length > 60 ? joined.Substring(0, 60) + "..." : joined;
+        }
+
+        private static string CellControlName(int tableIndex, int column, int storageIndex)
+        {
+            //表索引编入控件名:切表后同名单元格换名,焦点会话随之结束,撤销压栈标志才能正确复位
+            return "cell_" + tableIndex + "_" + column + "_" + storageIndex;
+        }
+
+        private void TrackFocusedRow(TableWorkspace workspace)
+        {
+            string focus = UnityEngine.GUI.GetNameOfFocusedControl();
+            if (!focus.StartsWith("cell_", StringComparison.Ordinal))
+            {
+                return;
+            }
+            int lastUnderscore = focus.LastIndexOf('_');
+            if (lastUnderscore > 0 &&
+                int.TryParse(focus.Substring(lastUnderscore + 1), out int storageIndex) &&
+                storageIndex >= 0 && storageIndex < workspace.Rows.Count)
+            {
+                workspace.View.SelectedRow = storageIndex;
+            }
+        }
+
+        private List<string> FindCellErrors(TableWorkspace workspace, JObject row, string field)
+        {
+            string entryId = workspace.Source.ExtractKey(row);
+            if (entryId == null)
+            {
+                return null;
+            }
+            List<string> messages = null;
+            foreach (TableEditError error in workspace.Errors)
+            {
+                if (error.FieldName == field && error.EntryId == entryId)
+                {
+                    (messages ?? (messages = new List<string>())).Add(error.Message);
+                }
+            }
+            return messages;
+        }
+
+        private bool RowHasEntryLevelError(TableWorkspace workspace, JObject row, GridView view)
+        {
+            string entryId = workspace.Source.ExtractKey(row);
+            if (entryId == null)
+            {
+                return workspace.Errors.Any(error => error.EntryId == null);
+            }
+            return workspace.Errors.Any(error =>
+                error.EntryId == entryId &&
+                (error.FieldName == null || !view.Columns.Contains(error.FieldName)));
+        }
+
+        private void DrawErrorList(TableWorkspace workspace)
+        {
+            if (workspace.Errors.Count == 0)
+            {
+                return;
+            }
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.MaxHeight(120f));
+            EditorGUILayout.LabelField(
+                "校验错误 " + workspace.Errors.Count + " 条(点击定位,修改后即时刷新,不阻断保存):",
+                EditorStyles.boldLabel);
+            errorListScroll = EditorGUILayout.BeginScrollView(errorListScroll);
+            foreach (TableEditError error in workspace.Errors)
+            {
+                if (GUILayout.Button("  " + error, EditorStyles.label))
+                {
+                    LocateError(workspace, error);
+                }
+            }
+            EditorGUILayout.EndScrollView();
+            EditorGUILayout.EndVertical();
+        }
+
+        private void LocateError(TableWorkspace workspace, TableEditError error)
+        {
+            workspace.View.Search = "";
+            if (error.EntryId != null)
+            {
+                for (int index = 0; index < workspace.Rows.Count; index++)
+                {
+                    if (workspace.Rows[index].Type != JTokenType.Object)
+                    {
+                        continue;
+                    }
+                    if (workspace.Source.ExtractKey((JObject)workspace.Rows[index]) == error.EntryId)
+                    {
+                        workspace.View.SelectedRow = index;
+                        int column = workspace.View.Columns.IndexOf(error.FieldName);
+                        if (column >= 0)
+                        {
+                            workspace.View.PendingFocusCell =
+                                CellControlName(workspaces.IndexOf(workspace), column, index);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            List<int> visible = ComputeVisibleRows(workspace);
+            int viewIndex = workspace.View.SelectedRow >= 0
+                ? visible.IndexOf(workspace.View.SelectedRow)
+                : -1;
+            if (viewIndex >= 0)
+            {
+                workspace.View.Scroll.y = Mathf.Max(0f, RowHeight * (viewIndex + 1) - 64f);
+            }
+            Repaint();
+        }
+
+        private void AddRow(TableWorkspace workspace)
+        {
+            PushUndoSnapshot(workspace);
+            JObject template = workspace.Source.CreateEntryTemplate();
+            template[workspace.Source.KeyFieldName] = GenerateUniqueKey(workspace);
+            workspace.Rows.Add(template);
+            int storageIndex = workspace.Rows.Count - 1;
+            workspace.View.SelectedRow = storageIndex;
+            workspace.View.PendingFocusCell = CellControlName(displayedTable, 0, storageIndex);
+            MarkEdited(workspace);
+        }
+
+        private void DeleteSelectedRow(TableWorkspace workspace)
+        {
+            int index = workspace.View.SelectedRow;
+            if (index < 0 || index >= workspace.Rows.Count)
+            {
+                return;
+            }
+            PushUndoSnapshot(workspace);
+            workspace.Rows.RemoveAt(index);
+            workspace.View.SelectedRow = Mathf.Min(index, workspace.Rows.Count - 1);
+            MarkEdited(workspace);
+        }
+
+        private void PushUndoOncePerFocusSession(TableWorkspace workspace)
+        {
+            if (undoPushedForFocusSession)
+            {
+                return;
+            }
+            PushUndoSnapshot(workspace);
+            undoPushedForFocusSession = true;
+        }
+
+        private void PushUndoSnapshot(TableWorkspace workspace)
+        {
+            workspace.View.UndoEntries.Add((JArray)workspace.Rows.DeepClone());
+            if (workspace.View.UndoEntries.Count > UndoCapacity)
+            {
+                workspace.View.UndoEntries.RemoveAt(0);
+            }
+            workspace.View.RedoEntries.Clear();
+        }
+
+        private void UndoOne()
+        {
+            TableWorkspace workspace = CurrentTable;
+            if (workspace == null || workspace.View.UndoEntries.Count == 0)
+            {
+                return;
+            }
+            workspace.View.RedoEntries.Add((JArray)workspace.Rows.DeepClone());
+            workspace.Rows = workspace.View.UndoEntries[workspace.View.UndoEntries.Count - 1];
+            workspace.View.UndoEntries.RemoveAt(workspace.View.UndoEntries.Count - 1);
+            RestoreAfterHistoryJump(workspace);
+        }
+
+        private void RedoOne()
+        {
+            TableWorkspace workspace = CurrentTable;
+            if (workspace == null || workspace.View.RedoEntries.Count == 0)
+            {
+                return;
+            }
+            workspace.View.UndoEntries.Add((JArray)workspace.Rows.DeepClone());
+            workspace.Rows = workspace.View.RedoEntries[workspace.View.RedoEntries.Count - 1];
+            workspace.View.RedoEntries.RemoveAt(workspace.View.RedoEntries.Count - 1);
+            RestoreAfterHistoryJump(workspace);
+        }
+
+        private void RestoreAfterHistoryJump(TableWorkspace workspace)
+        {
+            UnityEngine.GUI.FocusControl(null);
+            focusedCellControl = "";
+            undoPushedForFocusSession = false;
+            workspace.View.SelectedRow = -1;
+            RebuildColumns(workspace);
+            MarkEdited(workspace);
+        }
+
+        private void MarkEdited(TableWorkspace workspace)
+        {
+            workspace.Dirty = true;
+            ValidateAll();
+        }
+
+        private void SaveCurrentTable(TableWorkspace workspace)
+        {
+            try
+            {
+                workspace.Source.Save(workspace.Rows);
+            }
+            catch (Exception ex)
+            {
+                EditorUtility.DisplayDialog("保存失败", ex.Message, "确定");
+                return;
+            }
+            AssetDatabase.Refresh();
+            workspace.Dirty = false;
+        }
+
+        private void DiscardChanges(TableWorkspace workspace)
+        {
+            workspace.View.UndoEntries.Clear();
+            workspace.View.RedoEntries.Clear();
+            try
+            {
+                workspace.Rows = workspace.Source.LoadRows();
+                workspace.LoadError = null;
+            }
+            catch (Exception ex)
+            {
+                workspace.LoadError = ex.Message;
+            }
+            workspace.Dirty = false;
+            workspace.View.SelectedRow = -1;
+            RebuildColumns(workspace);
+            ValidateAll();
+        }
+
+        private void HandleSelectionChanged()
+        {
+            int target = FindTableIndexForSelection();
+            if (target == displayedTable)
+            {
+                return;
+            }
+            TableWorkspace current = CurrentTable;
+            if (current == null || !current.Dirty)
+            {
+                displayedTable = target;
+                return;
+            }
+
+            int choice = EditorUtility.DisplayDialogComplex(
+                "未保存的修改",
+                "表 " + current.Source.DisplayName + " 存在未保存的修改。切换选中文件前如何处理?",
+                "保存并切换", "留在当前表", "放弃并切换");
+            if (choice == 0)
+            {
+                SaveCurrentTable(current);
+                if (!current.Dirty)
+                {
+                    displayedTable = target;
+                }
+            }
+            else if (choice == 2)
+            {
+                DiscardChanges(current);
+                displayedTable = target;
+            }
+            //选「留在当前表」时保持显示当前表,不回改 Project 选中;下次选择变化会再次询问
+        }
+
+        private int FindTableIndexForSelection()
+        {
+            UnityEngine.Object selected = Selection.activeObject;
+            if (selected == null)
+            {
+                return -1;
+            }
+            string path = AssetDatabase.GetAssetPath(selected);
+            if (string.IsNullOrEmpty(path))
+            {
+                return -1;
+            }
+            path = path.Replace('\\', '/');
+            for (int index = 0; index < workspaces.Count; index++)
+            {
+                if (string.Equals(workspaces[index].Source.Path, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return index;
+                }
+            }
+            for (int index = 0; index < workspaces.Count; index++)
+            {
+                TableWorkspace workspace = workspaces[index];
+                //FolderPerEntry 声明的是条目文件夹,选中其中任一条目文件同样视为选中该表
+                if (workspace.Source.StorageKind == TableStorageKind.FolderPerEntry &&
+                    path.StartsWith(workspace.Source.Path + "/", StringComparison.OrdinalIgnoreCase) &&
+                    path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                {
+                    return index;
+                }
+            }
+            return -1;
+        }
+
+        private List<string> ResolveTargetIds(string tableName)
+        {
+            var ids = new List<string>();
+            TableWorkspace target = workspaces.FirstOrDefault(item => item.Source.TableName == tableName);
+            if (target == null)
+            {
+                return ids;
+            }
+            foreach (JToken token in target.Rows)
+            {
+                if (token.Type != JTokenType.Object)
+                {
+                    continue;
+                }
+                string key = target.Source.ExtractKey((JObject)token);
+                if (!string.IsNullOrEmpty(key) && !ids.Contains(key))
+                {
+                    ids.Add(key);
+                }
+            }
+            return ids;
+        }
+
+        private List<int> ComputeVisibleRows(TableWorkspace workspace)
+        {
+            IEnumerable<int> indices = Enumerable.Range(0, workspace.Rows.Count)
+                .Where(index => workspace.Rows[index].Type == JTokenType.Object);
+            if (!string.IsNullOrEmpty(workspace.View.Search))
+            {
+                indices = indices.Where(index =>
+                    RowMatchesSearch((JObject)workspace.Rows[index], workspace.View.Search));
+            }
+            int sortColumn = workspace.View.SortColumn;
+            if (sortColumn >= 0 && sortColumn < workspace.View.Columns.Count)
+            {
+                string field = workspace.View.Columns[sortColumn];
+                indices = workspace.View.SortDescending
+                    ? indices.OrderByDescending(index => workspace.Rows[index][field], TokenComparer.Instance)
+                    : indices.OrderBy(index => workspace.Rows[index][field], TokenComparer.Instance);
+            }
+            return indices.ToList();
+        }
+
+        private static bool RowMatchesSearch(JObject row, string filter)
+        {
+            foreach (JProperty property in row.Properties())
+            {
+                if (property.Value.Type != JTokenType.String)
+                {
+                    continue;
+                }
+                string text = (string)property.Value ?? "";
+                if (text.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         private void ReloadFromDiskWithConfirm()
         {
@@ -101,7 +879,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 {
                     continue;
                 }
-
                 ITableBrowserCatalog catalog;
                 try
                 {
@@ -109,13 +886,14 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"表目录 {catalogType.Name} 实例化失败: {ex.Message}");
+                    Debug.LogError("表目录 " + catalogType.Name + " 实例化失败: " + ex.Message);
                     continue;
                 }
-
                 foreach (ITableBrowserSource source in catalog.CreateSources())
                 {
                     var workspace = new TableWorkspace { Source = source };
+                    workspace.ReferenceFields.AddRange(
+                        source.References.Select(reference => reference.FieldName).Distinct());
                     try
                     {
                         workspace.Rows = source.LoadRows();
@@ -124,27 +902,56 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                     {
                         workspace.LoadError = ex.Message;
                     }
+                    RebuildColumns(workspace);
                     workspaces.Add(workspace);
                 }
             }
 
             keyResolver = new TableKeySetResolver();
-            selectedTable = workspaces.Count > 0 ? 0 : -1;
-            selectedEntry = -1;
+            displayedTable = FindTableIndexForSelection();
             ValidateAll();
         }
 
-        private void SaveCurrent()
+        private void RebuildColumns(TableWorkspace workspace)
         {
-            TableWorkspace workspace = Current;
-            if (workspace == null || workspace.LoadError != null)
+            var columns = new List<string>();
+            try
             {
-                return;
+                columns.AddRange(workspace.Source.CreateEntryTemplate()
+                    .Properties()
+                    .Select(property => property.Name));
             }
-            workspace.Source.Save(workspace.Rows);
-            AssetDatabase.Refresh();
-            workspace.Dirty = false;
-            ValidateAll();
+            catch (Exception)
+            {
+                //行类型无法实例化时退化为仅按行数据出现过的字段建列
+            }
+            foreach (JToken token in workspace.Rows)
+            {
+                if (token.Type != JTokenType.Object)
+                {
+                    continue;
+                }
+                foreach (JProperty property in ((JObject)token).Properties())
+                {
+                    if (!columns.Contains(property.Name))
+                    {
+                        columns.Add(property.Name);
+                    }
+                }
+            }
+
+            workspace.View.Columns = columns;
+            var widths = new float[columns.Count];
+            for (int index = 0; index < columns.Count; index++)
+            {
+                Vector2 size = EditorStyles.miniButton.CalcSize(new GUIContent(columns[index]));
+                widths[index] = Mathf.Clamp(size.x + 34f, 110f, 300f);
+            }
+            workspace.View.ColumnWidths = widths;
+            if (workspace.View.SortColumn >= columns.Count)
+            {
+                workspace.View.SortColumn = -1;
+            }
         }
 
         private void ValidateAll()
@@ -158,6 +965,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                     workspace.Errors.AddRange(workspace.Source.Validate(workspace.Rows, keyResolver));
                 }
             }
+            Repaint();
         }
 
         private void RebuildKeyResolver()
@@ -181,266 +989,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
         }
 
-        private void DrawTableList()
-        {
-            tableListScroll = EditorGUILayout.BeginScrollView(tableListScroll, GUILayout.Width(230));
-            for (int index = 0; index < workspaces.Count; index++)
-            {
-                TableWorkspace workspace = workspaces[index];
-                string label = (workspace.Dirty ? "* " : "") + workspace.Source.DisplayName;
-                if (workspace.LoadError != null || workspace.Errors.Count > 0)
-                {
-                    label += " (!)";
-                }
-                if (GUILayout.Button(label, index == selectedTable
-                    ? EditorStyles.whiteBoldLabel
-                    : EditorStyles.label))
-                {
-                    selectedTable = index;
-                    selectedEntry = -1;
-                    ValidateCurrent();
-                    UnityEngine.GUI.FocusControl(null);
-                    Repaint();
-                }
-            }
-            EditorGUILayout.EndScrollView();
-        }
-
-        private void DrawTablePanel()
-        {
-            TableWorkspace workspace = Current;
-            if (workspace == null)
-            {
-                return;
-            }
-
-            EditorGUILayout.BeginVertical(GUILayout.ExpandWidth(true));
-            EditorGUILayout.LabelField(
-                $"{workspace.Source.DisplayName}  ({workspace.Source.StorageKind})  条目 {workspace.Rows.Count}" +
-                (workspace.Dirty ? "  未保存" : ""),
-                EditorStyles.boldLabel);
-            EditorGUILayout.LabelField(workspace.Source.Path, EditorStyles.miniLabel);
-
-            if (workspace.LoadError != null)
-            {
-                EditorGUILayout.HelpBox("表文件读取失败: " + workspace.LoadError, MessageType.Error);
-                EditorGUILayout.EndVertical();
-                return;
-            }
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("新增条目"))
-            {
-                AddEntry(workspace);
-            }
-            using (new EditorGUI.DisabledScope(selectedEntry < 0 || selectedEntry >= workspace.Rows.Count))
-            {
-                if (GUILayout.Button("删除选中条目"))
-                {
-                    DeleteEntry(workspace);
-                }
-            }
-            EditorGUILayout.EndHorizontal();
-
-            DrawEntryList(workspace);
-
-            if (selectedEntry >= 0 && selectedEntry < workspace.Rows.Count)
-            {
-                entryEditorScroll = EditorGUILayout.BeginScrollView(entryEditorScroll);
-                DrawEntryEditor(workspace, (JObject)workspace.Rows[selectedEntry]);
-                EditorGUILayout.EndScrollView();
-            }
-
-            if (workspace.Errors.Count > 0)
-            {
-                EditorGUILayout.HelpBox(
-                    $"校验错误 {workspace.Errors.Count} 条(修改后即时刷新,不阻断保存):",
-                    MessageType.Error);
-                foreach (TableEditError error in workspace.Errors)
-                {
-                    EditorGUILayout.LabelField("  " + error);
-                }
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private void DrawEntryList(TableWorkspace workspace)
-        {
-            entryListScroll = EditorGUILayout.BeginScrollView(
-                entryListScroll, GUILayout.Height(Mathf.Min(160, 24 * workspace.Rows.Count + 8)));
-            for (int index = 0; index < workspace.Rows.Count; index++)
-            {
-                JObject row = (JObject)workspace.Rows[index];
-                string key = workspace.Source.ExtractKey(row) ?? "(缺少键)";
-                string summary = BuildEntrySummary(row, workspace.Source.KeyFieldName);
-                string label = index == selectedEntry
-                    ? $"> {key}  {summary}"
-                    : $"  {key}  {summary}";
-                if (GUILayout.Button(label, index == selectedEntry
-                    ? EditorStyles.whiteBoldLabel
-                    : EditorStyles.label))
-                {
-                    selectedEntry = index;
-                    UnityEngine.GUI.FocusControl(null);
-                    Repaint();
-                }
-            }
-            EditorGUILayout.EndScrollView();
-        }
-
-        private void DrawEntryEditor(TableWorkspace workspace, JObject row)
-        {
-            EditorGUILayout.Space();
-            foreach (JProperty property in row.Properties().ToList())
-            {
-                EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.PrefixLabel(property.Name);
-                DrawFieldEditor(workspace, row, property);
-                EditorGUILayout.EndHorizontal();
-            }
-        }
-
-        private void DrawFieldEditor(TableWorkspace workspace, JObject row, JProperty property)
-        {
-            switch (property.Value.Type)
-            {
-                case JTokenType.String:
-                    EditorGUI.BeginChangeCheck();
-                    string text = EditorGUILayout.TextField((string)property.Value);
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        property.Value = text;
-                        MarkEdited(workspace);
-                    }
-                    break;
-                case JTokenType.Boolean:
-                    EditorGUI.BeginChangeCheck();
-                    bool flag = EditorGUILayout.Toggle((bool)property.Value);
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        property.Value = flag;
-                        MarkEdited(workspace);
-                    }
-                    break;
-                case JTokenType.Integer:
-                    EditorGUI.BeginChangeCheck();
-                    long integer = EditorGUILayout.LongField((long)property.Value);
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        property.Value = integer;
-                        MarkEdited(workspace);
-                    }
-                    break;
-                case JTokenType.Float:
-                    EditorGUI.BeginChangeCheck();
-                    double real = EditorGUILayout.DoubleField((double)property.Value);
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        property.Value = real;
-                        MarkEdited(workspace);
-                    }
-                    break;
-                case JTokenType.Array:
-                    DrawStringArrayEditor(workspace, property);
-                    break;
-                case JTokenType.Null:
-                    //显式 null 只出现在绕过模板手改的数据里;按字符串编辑兜底,
-                    //改过即成为字符串字段,非字符串形状的 null 会被改写,保存前校验会兜住后续问题
-                    EditorGUI.BeginChangeCheck();
-                    string nullText = EditorGUILayout.TextField("");
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        property.Value = nullText;
-                        MarkEdited(workspace);
-                    }
-                    break;
-                default:
-                    EditorGUILayout.LabelField(
-                        property.Value.ToString(Newtonsoft.Json.Formatting.Indented),
-                        EditorStyles.wordWrappedMiniLabel);
-                    break;
-            }
-        }
-
-        private void DrawStringArrayEditor(TableWorkspace workspace, JProperty property)
-        {
-            var array = (JArray)property.Value;
-            if (array.All(element => element.Type == JTokenType.String))
-            {
-                EditorGUILayout.BeginVertical();
-                for (int index = 0; index < array.Count; index++)
-                {
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUI.BeginChangeCheck();
-                    string element = EditorGUILayout.TextField((string)array[index]);
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        array[index] = element;
-                        MarkEdited(workspace);
-                    }
-                    if (GUILayout.Button("移除", GUILayout.Width(44)))
-                    {
-                        array.RemoveAt(index);
-                        MarkEdited(workspace);
-                    }
-                    EditorGUILayout.EndHorizontal();
-                }
-                if (GUILayout.Button("添加元素"))
-                {
-                    array.Add("");
-                    MarkEdited(workspace);
-                }
-                EditorGUILayout.EndVertical();
-            }
-            else
-            {
-                EditorGUILayout.LabelField(
-                    property.Value.ToString(Newtonsoft.Json.Formatting.Indented),
-                    EditorStyles.wordWrappedMiniLabel);
-            }
-        }
-
-        private void AddEntry(TableWorkspace workspace)
-        {
-            JObject template = workspace.Source.CreateEntryTemplate();
-            template[workspace.Source.KeyFieldName] = GenerateUniqueKey(workspace);
-            workspace.Rows.Add(template);
-            selectedEntry = workspace.Rows.Count - 1;
-            MarkEdited(workspace);
-        }
-
-        private void DeleteEntry(TableWorkspace workspace)
-        {
-            if (selectedEntry < 0 || selectedEntry >= workspace.Rows.Count)
-            {
-                return;
-            }
-            workspace.Rows.RemoveAt(selectedEntry);
-            selectedEntry = Mathf.Min(selectedEntry, workspace.Rows.Count - 1);
-            MarkEdited(workspace);
-        }
-
-        private void MarkEdited(TableWorkspace workspace)
-        {
-            workspace.Dirty = true;
-            ValidateAll();
-        }
-
-        private void ValidateCurrent()
-        {
-            TableWorkspace workspace = Current;
-            if (workspace == null)
-            {
-                return;
-            }
-            workspace.Errors.Clear();
-            if (workspace.LoadError == null)
-            {
-                workspace.Errors.AddRange(workspace.Source.Validate(workspace.Rows, keyResolver));
-            }
-        }
-
         private string GenerateUniqueKey(TableWorkspace workspace)
         {
             string baseKey = "entry";
@@ -456,21 +1004,39 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             return candidate;
         }
 
-        private static string BuildEntrySummary(JObject row, string keyFieldName)
+        private sealed class TokenComparer : IComparer<JToken>
         {
-            foreach (JProperty property in row.Properties())
+            public static readonly TokenComparer Instance = new TokenComparer();
+
+            public int Compare(JToken x, JToken y)
             {
-                if (property.Name == keyFieldName || property.Value.Type != JTokenType.String)
+                bool xMissing = x == null || x.Type == JTokenType.Null;
+                bool yMissing = y == null || y.Type == JTokenType.Null;
+                if (xMissing || yMissing)
                 {
-                    continue;
+                    return xMissing ? (yMissing ? 0 : -1) : 1;
                 }
-                string value = (string)property.Value;
-                if (!string.IsNullOrEmpty(value))
+                if (IsNumeric(x) && IsNumeric(y))
                 {
-                    return value;
+                    return Convert.ToDouble(((JValue)x).Value)
+                        .CompareTo(Convert.ToDouble(((JValue)y).Value));
                 }
+                return string.Compare(CellSortText(x), CellSortText(y), StringComparison.OrdinalIgnoreCase);
             }
-            return "";
+
+            private static bool IsNumeric(JToken token)
+            {
+                return token.Type == JTokenType.Integer || token.Type == JTokenType.Float;
+            }
+
+            private static string CellSortText(JToken token)
+            {
+                if (token.Type == JTokenType.Array)
+                {
+                    return BuildArraySummary((JArray)token);
+                }
+                return token.ToString();
+            }
         }
     }
 }

@@ -57,6 +57,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         /// <summary>键字段名。</summary>
         public string KeyFieldName => definition.KeyFieldName;
 
+        /// <summary>跨表引用声明。</summary>
+        public IReadOnlyList<TableReference> References => definition.References;
+
         /// <summary>从磁盘读取全部行;文件不可读或结构不符时抛出异常。</summary>
         /// <exception cref="InvalidOperationException">文件内容不是声明形状要求的 JSON 结构。</exception>
         public JArray LoadRows()

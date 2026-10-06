@@ -35,6 +35,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         /// <summary>键字段名。</summary>
         string KeyFieldName { get; }
 
+        /// <summary>跨表引用声明;供编辑 UI 渲染引用字段的下拉选项,内容来自表声明。</summary>
+        IReadOnlyList<TableReference> References { get; }
+
         /// <summary>从磁盘读取全部行;文件不可读或结构不符时抛出异常,由调用方呈现。</summary>
         JArray LoadRows();
 
