@@ -74,12 +74,24 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         private void OnEnable()
         {
             minSize = new Vector2(720f, 400f);
+            //进/出 PlayMode 触发域重载时,OnEnable 在 EditorStyles 与 TypeCache 重建完成前执行,
+            //此处装载会在量列宽或查目录类型时抛空引用并中断,因此统一推迟到编辑器空闲帧
+            EditorApplication.delayCall += ReloadOnEditorIdle;
+        }
+
+        private void ReloadOnEditorIdle()
+        {
+            if (this == null || workspaces.Count > 0)
+            {
+                return;
+            }
             ReloadAll();
             if (workspaces.Count == 0)
             {
-                //域重载后 OnEnable 可能早于 TypeCache 就绪执行,目录类型查不到会误报空目录;编辑器稳定后补载一次
+                //首次装载时 TypeCache 可能仍未就绪而查不到目录,编辑器稳定后再补载一次
                 EditorApplication.delayCall += ReloadIfStillEmpty;
             }
+            Repaint();
         }
 
         private void ReloadIfStillEmpty()
@@ -186,8 +198,11 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 {
                     SaveCurrentTable(workspace);
                 }
-                workspace.View.Search = EditorGUILayout.TextField(
-                    workspace.View.Search, EditorStyles.toolbarTextField, GUILayout.MinWidth(160f));
+                if (workspace != null)
+                {
+                    workspace.View.Search = EditorGUILayout.TextField(
+                        workspace.View.Search, EditorStyles.toolbarTextField, GUILayout.MinWidth(160f));
+                }
             }
 
             if (GUILayout.Button("从磁盘重新载入", EditorStyles.toolbarButton))
