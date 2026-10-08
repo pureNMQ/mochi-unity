@@ -15,7 +15,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
     }
 
     /// <summary>
-    /// 浏览器可编辑的一张表的非泛型门面,由 <see cref="TableBrowserSource{TKey,TValue}"/> 从泛型声明适配而来。
+    /// 浏览器可编辑的一张表的非泛型门面,由 <see cref="TableBrowserSource{TRow}"/> 从泛型声明适配而来。
     /// 浏览器窗口只依赖本接口与 Mochi 核心公开类型,不接触各表的具体行类型。
     /// </summary>
     public interface ITableBrowserSource

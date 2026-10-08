@@ -15,11 +15,11 @@ namespace Mochi.Unity.Editor.DataTableBrowser
     /// <summary>
     /// 从泛型表声明适配出的浏览器表源,承载磁盘读写与编辑期校验。
     /// </summary>
-    /// <typeparam name="TKey">表键类型。</typeparam>
-    /// <typeparam name="TValue">行数据类型;新条目模板取其无参构造默认值的全部字段。</typeparam>
-    public sealed class TableBrowserSource<TKey, TValue> : ITableBrowserSource
+    /// <typeparam name="TRow">行数据类型,必须继承 <see cref="TableRow"/>;新条目模板取其无参构造默认值的全部字段。</typeparam>
+    public sealed class TableBrowserSource<TRow> : ITableBrowserSource
+        where TRow : TableRow
     {
-        private readonly TableDefinition<TKey, TValue> definition;
+        private readonly TableDefinition<TRow> definition;
         private readonly string displayName;
 
         /// <summary>
@@ -31,7 +31,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         /// <param name="displayName">浏览器显示名;传 null 时使用表名。</param>
         /// <exception cref="ArgumentNullException">definition 或 path 为 null。</exception>
         public TableBrowserSource(
-            TableDefinition<TKey, TValue> definition,
+            TableDefinition<TRow> definition,
             string path,
             TableStorageKind storageKind,
             string displayName = null)
@@ -40,7 +40,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             Path = path ?? throw new ArgumentNullException(nameof(path));
             StorageKind = storageKind;
             this.displayName = string.IsNullOrEmpty(displayName) ? definition.TableName : displayName;
-            EnumFields = CollectEnumFields(typeof(TValue));
+            EnumFields = CollectEnumFields(typeof(TRow));
         }
 
         private static IReadOnlyDictionary<string, string[]> CollectEnumFields(Type rowType)
@@ -69,7 +69,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         public string Path { get; }
 
         /// <summary>键字段名。</summary>
-        public string KeyFieldName => definition.KeyFieldName;
+        public string KeyFieldName => TableRow.IdFieldName;
 
         /// <summary>跨表引用声明。</summary>
         public IReadOnlyList<TableReference> References => definition.References;
@@ -113,7 +113,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             var serializer = new JsonSerializer();
             serializer.Converters.Add(new StringEnumConverter());
 
-            TValue instance = Activator.CreateInstance<TValue>();
+            TRow instance = Activator.CreateInstance<TRow>();
             FillNullReferenceFields(instance);
             JObject template = JObject.FromObject(instance, serializer);
             template[KeyFieldName] = "";
