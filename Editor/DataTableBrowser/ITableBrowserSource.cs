@@ -7,15 +7,15 @@ namespace Mochi.Unity.Editor.DataTableBrowser
     /// <summary>表文件在磁盘上的组织形状。</summary>
     public enum TableStorageKind
     {
-        /// <summary>单个 JSON 文件,顶层为行对象数组。</summary>
-        SingleFileArray,
+        /// <summary>单个 JSON 文件:顶层为 {"$table":{...},"rows":[...]} 表对象。</summary>
+        SingleFile,
 
         /// <summary>一个文件夹,每个条目一个 JSON 文件,文件名(不含扩展名)即条目键。</summary>
         FolderPerEntry
     }
 
     /// <summary>
-    /// 浏览器可编辑的一张表的非泛型门面,由 <see cref="TableBrowserSource{TRow}"/> 从泛型声明适配而来。
+    /// 浏览器可编辑的一张表的非泛型门面,由 <see cref="TableBrowserSource{TRow}"/> 从表头与行类型适配而来。
     /// 浏览器窗口只依赖本接口与 Mochi 核心公开类型,不接触各表的具体行类型。
     /// </summary>
     public interface ITableBrowserSource
@@ -29,7 +29,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         /// <summary>磁盘组织形状。</summary>
         TableStorageKind StorageKind { get; }
 
-        /// <summary>项目相对路径,正斜杠分隔;SingleFileArray 指向 json 文件,FolderPerEntry 指向条目文件夹。</summary>
+        /// <summary>项目相对路径,正斜杠分隔;SingleFile 指向表 json 文件,FolderPerEntry 指向条目文件夹。</summary>
         string Path { get; }
 
         /// <summary>键字段名。</summary>
@@ -54,7 +54,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         IReadOnlyList<TableEditError> Validate(JArray rows, IEditTimeKeyResolver keyResolver);
 
         /// <summary>
-        /// 按存储形状把行数组写回磁盘:SingleFileArray 重写单文件;
+        /// 按存储形状把行数组写回磁盘:SingleFile 以表头加 rows 重写单文件;
         /// FolderPerEntry 逐条目写 {键}.json 并删除不再存在的条目文件。
         /// </summary>
         void Save(JArray rows);

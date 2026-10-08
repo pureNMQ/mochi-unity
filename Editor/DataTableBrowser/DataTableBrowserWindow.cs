@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Mochi.DataTable;
 using Newtonsoft.Json.Linq;
@@ -10,10 +11,9 @@ using UnityEngine;
 namespace Mochi.Unity.Editor.DataTableBrowser
 {
     /// <summary>
-    /// 通用数据表浏览器:内容跟随 Project 窗口当前选中的表文件,以类 Excel 网格呈现,
-    /// 列=表全部字段、行=条目、单元格直接编辑,支持列头排序、搜索过滤与撤销重做。
-    /// 磁盘读写与编辑期校验全部经 <see cref="ITableBrowserSource"/> 完成;
-    /// 编辑中的未保存修改即时进入快照,参与其他表的引用解析。
+    /// 通用数据表浏览器:打开 Project 窗口当前选中的、带合法 "$table" 表头的表文件,
+    /// 以类 Excel 网格呈现,列=表全部字段、行=条目、单元格直接编辑,支持列头排序、搜索过滤与撤销重做。
+    /// 表名与行类型按文件表头识别,无任何代码侧目录;磁盘读写与编辑期校验全部经 <see cref="ITableBrowserSource"/> 完成。
     /// </summary>
     public sealed class DataTableBrowserWindow : EditorWindow
     {
@@ -75,32 +75,17 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         {
             minSize = new Vector2(720f, 400f);
             //进/出 PlayMode 触发域重载时,OnEnable 在 EditorStyles 与 TypeCache 重建完成前执行,
-            //此处装载会在量列宽或查目录类型时抛空引用并中断,因此统一推迟到编辑器空闲帧
-            EditorApplication.delayCall += ReloadOnEditorIdle;
+            //此处按选中的表文件恢复打开会在其中抛空引用,因此统一推迟到编辑器空闲帧
+            EditorApplication.delayCall += RestoreFromSelection;
         }
 
-        private void ReloadOnEditorIdle()
+        private void RestoreFromSelection()
         {
             if (this == null || workspaces.Count > 0)
             {
                 return;
             }
-            ReloadAll();
-            if (workspaces.Count == 0)
-            {
-                //首次装载时 TypeCache 可能仍未就绪而查不到目录,编辑器稳定后再补载一次
-                EditorApplication.delayCall += ReloadIfStillEmpty;
-            }
-            Repaint();
-        }
-
-        private void ReloadIfStillEmpty()
-        {
-            if (this == null || workspaces.Count > 0)
-            {
-                return;
-            }
-            ReloadAll();
+            OpenSelectionIfTable();
             Repaint();
         }
 
@@ -233,16 +218,8 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void DrawHint()
         {
-            if (workspaces.Count == 0)
-            {
-                EditorGUILayout.HelpBox(
-                    "没有发现任何表目录。请实现 ITableBrowserCatalog 并声明表源。",
-                    MessageType.Info);
-                return;
-            }
             EditorGUILayout.HelpBox(
-                "在 Project 窗口选中一个已声明的表文件,即可在此以网格打开该表:\n" +
-                string.Join("\n", workspaces.Select(item => "  " + item.Source.Path).ToArray()),
+                "在 Project 窗口选中一个带 $table 表头的数据表 .json 文件,即可在此打开编辑。",
                 MessageType.Info);
         }
 
@@ -817,72 +794,123 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void HandleSelectionChanged()
         {
-            int target = FindTableIndexForSelection();
-            if (target == displayedTable || target < 0)
+            //窗口只被选中的表文件牵引:空选、非 json 或无合法表头的文件不抢已打开的表
+            OpenSelectionIfTable();
+        }
+
+        private void OpenSelectionIfTable()
+        {
+            string path = SelectedJsonPath();
+            if (path == null)
             {
-                //窗口只被选中的表文件牵引:空选或选中非表资产不抢已打开的表,
-                //提示态只在尚未打开任何表时出现
                 return;
             }
             TableWorkspace current = CurrentTable;
-            if (current == null || !current.Dirty)
+            if (current != null &&
+                string.Equals(current.Source.Path, path, StringComparison.OrdinalIgnoreCase))
             {
-                displayedTable = target;
                 return;
             }
 
-            int choice = EditorUtility.DisplayDialogComplex(
-                "未保存的修改",
-                "表 " + current.Source.DisplayName + " 存在未保存的修改。切换选中文件前如何处理?",
-                "保存并切换", "留在当前表", "放弃并切换");
-            if (choice == 0)
+            ITableBrowserSource source = TryCreateSourceFromSelection(path);
+            if (source == null)
             {
-                SaveCurrentTable(current);
-                if (!current.Dirty)
+                return;
+            }
+            if (current != null && current.Dirty)
+            {
+                int choice = EditorUtility.DisplayDialogComplex(
+                    "未保存的修改",
+                    "表 " + current.Source.DisplayName + " 存在未保存的修改。切换选中文件前如何处理?",
+                    "保存并切换", "留在当前表", "放弃并切换");
+                if (choice == 0)
                 {
-                    displayedTable = target;
+                    SaveCurrentTable(current);
+                    if (current.Dirty)
+                    {
+                        return;
+                    }
+                }
+                else if (choice == 2)
+                {
+                    DiscardChanges(current);
+                }
+                else
+                {
+                    //选「留在当前表」时保持显示当前表,不回改 Project 选中;下次选择变化会再次询问
+                    return;
                 }
             }
-            else if (choice == 2)
-            {
-                DiscardChanges(current);
-                displayedTable = target;
-            }
-            //选「留在当前表」时保持显示当前表,不回改 Project 选中;下次选择变化会再次询问
+            OpenTable(source);
         }
 
-        private int FindTableIndexForSelection()
+        private static string SelectedJsonPath()
         {
             UnityEngine.Object selected = Selection.activeObject;
             if (selected == null)
             {
-                return -1;
+                return null;
             }
             string path = AssetDatabase.GetAssetPath(selected);
-            if (string.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path) || !path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             {
-                return -1;
+                return null;
             }
-            path = path.Replace('\\', '/');
-            for (int index = 0; index < workspaces.Count; index++)
+            return path.Replace('\\', '/');
+        }
+
+        private static ITableBrowserSource TryCreateSourceFromSelection(string path)
+        {
+            JToken root;
+            try
             {
-                if (string.Equals(workspaces[index].Source.Path, path, StringComparison.OrdinalIgnoreCase))
-                {
-                    return index;
-                }
+                root = JToken.Parse(
+                    File.ReadAllText(TableBrowserSource<TableRow>.ToAbsolutePath(path)));
             }
-            for (int index = 0; index < workspaces.Count; index++)
+            catch (Exception)
             {
-                TableWorkspace workspace = workspaces[index];
-                //FolderPerEntry 声明的是条目文件夹,选中其中任一条目文件同样视为选中该表
-                if (workspace.Source.StorageKind == TableStorageKind.FolderPerEntry &&
-                    path.StartsWith(workspace.Source.Path + "/", StringComparison.OrdinalIgnoreCase) &&
-                    path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-                {
-                    return index;
-                }
+                //json 无法解析属非数据表文件或损坏文件,本版本静默忽略;警告呈现属后续浏览器任务
+                return null;
             }
-            return -1;
+            if (root.Type != JTokenType.Object ||
+                !TableHeader.TryParse((JObject)root, out TableHeader header, out _))
+            {
+                return null;
+            }
+            try
+            {
+                return TableBrowserSourceFactory.CreateFromHeader(header, path);
+            }
+            catch (InvalidOperationException)
+            {
+                //表头行类型不在已编译类型中(被重命名或删除);失配警示与重选 UI 属后续浏览器任务
+                return null;
+            }
+        }
+
+        private void OpenTable(ITableBrowserSource source)
+        {
+            var workspace = new TableWorkspace { Source = source };
+            workspace.ReferenceFields.AddRange(
+                source.References.Select(reference => reference.FieldName).Distinct());
+            foreach (var pair in source.EnumFields)
+            {
+                workspace.EnumFields[pair.Key] = pair.Value;
+            }
+            try
+            {
+                workspace.Rows = source.LoadRows();
+            }
+            catch (Exception ex)
+            {
+                workspace.LoadError = ex.Message;
+            }
+            RebuildColumns(workspace);
+            workspaces.Clear();
+            workspaces.Add(workspace);
+            displayedTable = 0;
+            keyResolver = new TableKeySetResolver();
+            ValidateAll();
         }
 
         private List<string> ResolveTargetIds(string tableName)
@@ -961,48 +989,12 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void ReloadAll()
         {
-            workspaces.Clear();
-            foreach (Type catalogType in TypeCache.GetTypesDerivedFrom<ITableBrowserCatalog>())
+            //当前窗口至多打开一张表,重新载入即重读这张表;无打开表时无可重载内容
+            TableWorkspace workspace = CurrentTable;
+            if (workspace != null)
             {
-                if (catalogType.IsAbstract)
-                {
-                    continue;
-                }
-                ITableBrowserCatalog catalog;
-                try
-                {
-                    catalog = (ITableBrowserCatalog)Activator.CreateInstance(catalogType);
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogError("表目录 " + catalogType.Name + " 实例化失败: " + ex.Message);
-                    continue;
-                }
-                foreach (ITableBrowserSource source in catalog.CreateSources())
-                {
-                    var workspace = new TableWorkspace { Source = source };
-                    workspace.ReferenceFields.AddRange(
-                        source.References.Select(reference => reference.FieldName).Distinct());
-                    foreach (var pair in source.EnumFields)
-                    {
-                        workspace.EnumFields[pair.Key] = pair.Value;
-                    }
-                    try
-                    {
-                        workspace.Rows = source.LoadRows();
-                    }
-                    catch (Exception ex)
-                    {
-                        workspace.LoadError = ex.Message;
-                    }
-                    RebuildColumns(workspace);
-                    workspaces.Add(workspace);
-                }
+                DiscardChanges(workspace);
             }
-
-            keyResolver = new TableKeySetResolver();
-            displayedTable = FindTableIndexForSelection();
-            ValidateAll();
         }
 
         private void RebuildColumns(TableWorkspace workspace)
@@ -1063,7 +1055,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void RebuildKeyResolver()
         {
-            //编辑中的未保存修改必须即时参与他表引用解析,因此每次校验前从全部工作区重建键集合
+            //校验前的键集合从当前工作区内存行重建,未保存的行内修改即参与校验
             keyResolver = new TableKeySetResolver();
             foreach (TableWorkspace workspace in workspaces)
             {

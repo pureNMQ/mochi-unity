@@ -13,7 +13,8 @@ using UnityEngine;
 namespace Mochi.Unity.Editor.DataTableBrowser
 {
     /// <summary>
-    /// 从泛型表声明适配出的浏览器表源,承载磁盘读写与编辑期校验。
+    /// 从行类型与表名适配出的浏览器表源,承载磁盘读写与编辑期校验。
+    /// 单文件形状按 {"$table":{...},"rows":[...]} 读写,表头行类型取泛型行类型完整类名。
     /// </summary>
     /// <typeparam name="TRow">行数据类型,必须继承 <see cref="TableRow"/>;新条目模板取其无参构造默认值的全部字段。</typeparam>
     public sealed class TableBrowserSource<TRow> : ITableBrowserSource
@@ -23,9 +24,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         private readonly string displayName;
 
         /// <summary>
-        /// 从表声明构造表源。
+        /// 从行类型与表名构造表源。
         /// </summary>
-        /// <param name="definition">表声明。</param>
+        /// <param name="definition">表声明,仅需表名。</param>
         /// <param name="path">项目相对路径,正斜杠分隔;形状由 <paramref name="storageKind"/> 决定。</param>
         /// <param name="storageKind">磁盘组织形状。</param>
         /// <param name="displayName">浏览器显示名;传 null 时使用表名。</param>
@@ -78,17 +79,31 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         public IReadOnlyDictionary<string, string[]> EnumFields { get; }
 
         /// <summary>从磁盘读取全部行;文件不可读或结构不符时抛出异常。</summary>
-        /// <exception cref="InvalidOperationException">文件内容不是声明形状要求的 JSON 结构。</exception>
+        /// <exception cref="InvalidOperationException">文件内容不是声明形状要求的 JSON 结构,或表头与本表源不符。</exception>
         public JArray LoadRows()
         {
-            if (StorageKind == TableStorageKind.SingleFileArray)
+            if (StorageKind == TableStorageKind.SingleFile)
             {
                 JToken root = JToken.Parse(File.ReadAllText(ToAbsolutePath(Path)));
-                if (root.Type != JTokenType.Array)
+                if (root.Type != JTokenType.Object)
                 {
-                    throw new InvalidOperationException($"{Path} 的顶层不是行对象数组。");
+                    throw new InvalidOperationException($"{Path} 顶层不是 JSON 对象,缺少 {TableHeader.FieldName} 表头。");
                 }
-                return (JArray)root;
+                if (!TableHeader.TryParse((JObject)root, out TableHeader header, out string headerError))
+                {
+                    throw new InvalidOperationException($"{Path} 表头不合法: {headerError}");
+                }
+                if (header.Table != TableName || header.RowType != typeof(TRow).FullName)
+                {
+                    throw new InvalidOperationException(
+                        $"{Path} 表头({header.Table}/{header.RowType})与本表源({TableName}/{typeof(TRow).FullName})不符。");
+                }
+                JToken rowsToken = root[TableHeader.RowsFieldName];
+                if (rowsToken == null || rowsToken.Type != JTokenType.Array)
+                {
+                    throw new InvalidOperationException($"{Path} 缺少 {TableHeader.RowsFieldName} 行数组。");
+                }
+                return (JArray)rowsToken;
             }
 
             string folder = ToAbsolutePath(Path);
@@ -109,9 +124,10 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         public JObject CreateEntryTemplate()
         {
             //枚举按字符串写入模板,与项目内既有表文件的字符串写法保持一致;
-            //反序列化对字符串与数字均兼容,保存沿编辑后的原样写出。
+            //反序列化对字符串与数字均兼容,保存沿编辑后的原样写出
             var serializer = new JsonSerializer();
             serializer.Converters.Add(new StringEnumConverter());
+            serializer.Converters.Add(new DataRefJsonConverter());
 
             TRow instance = Activator.CreateInstance<TRow>();
             FillNullReferenceFields(instance);
@@ -164,14 +180,20 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         }
 
         /// <summary>
-        /// 按存储形状写回磁盘:SingleFileArray 重写单文件;
+        /// 按存储形状写回磁盘:SingleFile 以当前表头加 rows 重写单文件;
         /// FolderPerEntry 逐条目写 {键}.json,并删除键已不存在的条目文件(经 AssetDatabase 连 .meta 一并删除)。
         /// </summary>
         public void Save(JArray rows)
         {
-            if (StorageKind == TableStorageKind.SingleFileArray)
+            if (StorageKind == TableStorageKind.SingleFile)
             {
-                File.WriteAllText(ToAbsolutePath(Path), rows.ToString(Formatting.Indented));
+                var header = new TableHeader(TableName, typeof(TRow).FullName, TableHeader.CurrentFormatVersion);
+                var root = new JObject
+                {
+                    [TableHeader.FieldName] = header.ToJson(),
+                    [TableHeader.RowsFieldName] = rows,
+                };
+                File.WriteAllText(ToAbsolutePath(Path), root.ToString(Formatting.Indented));
                 return;
             }
 
@@ -205,7 +227,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
         }
 
-        private static string ToAbsolutePath(string projectRelativePath)
+        internal static string ToAbsolutePath(string projectRelativePath)
         {
             string projectRoot = System.IO.Path.GetFullPath(
                 System.IO.Path.Combine(Application.dataPath, ".."));
