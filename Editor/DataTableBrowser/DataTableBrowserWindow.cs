@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Mochi.DataTable;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
@@ -12,8 +13,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 {
     /// <summary>
     /// 通用数据表浏览器:打开 Project 窗口当前选中的、带合法 "$table" 表头的表文件,
-    /// 以类 Excel 网格呈现,列=表全部字段、行=条目、单元格直接编辑,支持列头排序、搜索过滤与撤销重做。
-    /// 表名与行类型按文件表头识别,无任何代码侧目录;磁盘读写与编辑期校验全部经 <see cref="ITableBrowserSource"/> 完成。
+    /// 以类 Excel 网格呈现,列=行类型全部字段、行=条目、单元格直接编辑,支持列头排序、搜索过滤与撤销重做。
+    /// 表名与行类型按文件表头识别,无任何代码侧目录;磁盘读写、演化整形状与编辑期校验全部经
+    /// <see cref="ITableBrowserSource"/> 完成。表头行类型失配的文件以横幅呈现,可搜索重选类型修复。
     /// </summary>
     public sealed class DataTableBrowserWindow : EditorWindow
     {
@@ -44,18 +46,24 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private sealed class TableWorkspace
         {
+            /// <summary>可编辑表源;null 表示表头失配态,只有 <see cref="Header"/> 与 <see cref="Path"/> 可用。</summary>
             public ITableBrowserSource Source;
+
+            /// <summary>打开时从文件解析的表头;失配态下驱动横幅与重选。</summary>
+            public TableHeader Header;
+
+            /// <summary>表文件的项目相对路径;失配态没有 Source,单独保存。</summary>
+            public string Path;
+
             public JArray Rows = new JArray();
             public bool Dirty;
             public string LoadError;
-            public readonly List<TableEditError> Errors = new List<TableEditError>();
-            public readonly List<string> ReferenceFields = new List<string>();
+            public readonly List<TableBrowserError> Errors = new List<TableBrowserError>();
             public readonly Dictionary<string, string[]> EnumFields = new Dictionary<string, string[]>();
             public readonly GridView View = new GridView();
         }
 
         private readonly List<TableWorkspace> workspaces = new List<TableWorkspace>();
-        private TableKeySetResolver keyResolver = new TableKeySetResolver();
         private int displayedTable = -1;
         private Vector2 errorListScroll;
 
@@ -63,6 +71,17 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         //同一焦点期内的后续击键不再重复压栈;焦点移出即结束会话
         private string focusedCellControl = "";
         private bool undoPushedForFocusSession;
+
+        /// <summary>单元格按期望类型渲染的种类,由字段 CLR 类型决定,与 JSON 值实际类型无关。</summary>
+        private enum FieldEditKind
+        {
+            Text,
+            Bool,
+            Integer,
+            Real,
+            Array,
+            ReadOnly
+        }
 
         /// <summary>打开数据表浏览器窗口(菜单 Mochi/Data Table Browser)。</summary>
         [MenuItem("Mochi/Data Table Browser")]
@@ -105,6 +124,12 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             if (workspace == null)
             {
                 DrawHint();
+                return;
+            }
+
+            if (workspace.Source == null)
+            {
+                DrawHeaderMismatch(workspace);
                 return;
             }
 
@@ -162,7 +187,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             TableWorkspace workspace = CurrentTable;
-            bool editable = workspace != null && workspace.LoadError == null;
+            bool editable = workspace != null && workspace.Source != null && workspace.LoadError == null;
 
             using (new EditorGUI.DisabledScope(!editable))
             {
@@ -190,6 +215,11 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 }
             }
 
+            if (GUILayout.Button("新建表", EditorStyles.toolbarButton))
+            {
+                NewDataTableDialog.Open();
+            }
+
             if (GUILayout.Button("从磁盘重新载入", EditorStyles.toolbarButton))
             {
                 ReloadFromDiskWithConfirm();
@@ -198,10 +228,20 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             GUILayout.FlexibleSpace();
             if (workspace != null)
             {
-                string status = workspace.LoadError != null
-                    ? "读取失败"
-                    : (workspace.Dirty ? "* 未保存" : "已保存") +
+                string status;
+                if (workspace.Source == null)
+                {
+                    status = "表头失配";
+                }
+                else if (workspace.LoadError != null)
+                {
+                    status = "读取失败";
+                }
+                else
+                {
+                    status = (workspace.Dirty ? "* 未保存" : "已保存") +
                         (workspace.Errors.Count > 0 ? "  |  校验错误 " + workspace.Errors.Count + " 条" : "");
+                }
                 EditorGUILayout.LabelField(status, EditorStyles.miniLabel);
             }
             EditorGUILayout.EndHorizontal();
@@ -219,8 +259,64 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         private void DrawHint()
         {
             EditorGUILayout.HelpBox(
-                "在 Project 窗口选中一个带 $table 表头的数据表 .json 文件,即可在此打开编辑。",
+                "在 Project 窗口选中一个带 $table 表头的数据表 .json 文件,即可在此打开编辑;或点击工具栏「新建表」创建新表。",
                 MessageType.Info);
+        }
+
+        private void DrawHeaderMismatch(TableWorkspace workspace)
+        {
+            EditorGUILayout.HelpBox(
+                "表头行类型失配: " + workspace.Header.RowType +
+                " 不是已编译的 TableRow 派生类型,可能已被重命名或删除,文件当前不可编辑。\n" + workspace.Path,
+                MessageType.Error);
+            EditorGUILayout.BeginHorizontal();
+            Rect buttonRect = GUILayoutUtility.GetRect(
+                new GUIContent("重选行类型"), EditorStyles.miniButton, GUILayout.Width(160f));
+            if (UnityEngine.GUI.Button(buttonRect, "重选行类型", EditorStyles.miniButton))
+            {
+                OpenRowTypePicker(buttonRect, workspace.Header.RowType,
+                    selected => RewriteHeaderRowType(workspace, selected));
+            }
+            if (GUILayout.Button("关闭", EditorStyles.miniButton, GUILayout.Width(80f)))
+            {
+                workspaces.Clear();
+                displayedTable = -1;
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+
+        /// <summary>以可搜索下拉列出全部可用行类型;当前失配名仅作展示项置顶,不可选中。</summary>
+        private void OpenRowTypePicker(Rect activator, string mismatchedRowType, Action<string> onSelected)
+        {
+            var options = new List<(string Value, bool Enabled)>
+            {
+                { (mismatchedRowType + " (当前值,不存在)", false) }
+            };
+            foreach (Type type in TableBrowserSourceFactory.ListRowTypes())
+            {
+                options.Add((type.FullName, true));
+            }
+            var dropdown = new TableValueDropdown(
+                new AdvancedDropdownState(), "重选行类型", options, onSelected);
+            dropdown.Show(new Rect(activator.x, activator.y, Mathf.Clamp(activator.width, 360f, 560f), activator.height));
+        }
+
+        private void RewriteHeaderRowType(TableWorkspace workspace, string rowTypeFullName)
+        {
+            string absolutePath = TableBrowserSource<TableRow>.ToAbsolutePath(workspace.Path);
+            try
+            {
+                JObject root = JObject.Parse(File.ReadAllText(absolutePath));
+                ((JObject)root[TableHeader.FieldName])["rowType"] = rowTypeFullName;
+                File.WriteAllText(absolutePath, root.ToString(Formatting.Indented));
+                AssetDatabase.ImportAsset(workspace.Path);
+            }
+            catch (Exception ex)
+            {
+                EditorUtility.DisplayDialog("重选类型失败", ex.Message, "确定");
+                return;
+            }
+            OpenTableFromPath(workspace.Path);
         }
 
         private void DrawGrid(TableWorkspace workspace)
@@ -338,53 +434,44 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         {
             UnityEngine.GUI.SetNextControlName(
                 CellControlName(tableIndex, column, storageIndex));
+            TableRowField fieldMeta = workspace.Source.Fields[column];
             JToken value = row[field];
-            if (value == null)
-            {
-                //字段被手改数据整列删除时以空文本兜底,补上值后该行恢复完整字段
-                EditorGUI.BeginChangeCheck();
-                string restored = EditorGUI.TextField(cellRect, "");
-                if (EditorGUI.EndChangeCheck())
-                {
-                    PushUndoOncePerFocusSession(workspace);
-                    row[field] = restored;
-                    MarkEdited(workspace);
-                }
-                return;
-            }
 
             List<string> cellErrors = FindCellErrors(workspace, row, field);
-            bool enumInvalid = IsInvalidEnumValue(workspace, field, value);
-            if (cellErrors != null || enumInvalid)
+            if (cellErrors != null)
             {
                 EditorGUI.DrawRect(cellRect, ErrorCellColor);
             }
 
-            if (value.Type != JTokenType.Array &&
-                (workspace.EnumFields.ContainsKey(field) || workspace.ReferenceFields.Contains(field)))
+            if (workspace.EnumFields.ContainsKey(field) && !IsListField(fieldMeta))
             {
-                DrawComboboxCell(workspace, row, field, cellRect);
+                DrawEnumCell(workspace, row, field, value, cellRect);
             }
             else
             {
-                switch (value.Type)
+                switch (FieldEditKindOf(fieldMeta))
                 {
-                    case JTokenType.String:
-                    case JTokenType.Null:
-                        DrawTextCell(workspace, row, field,
-                            value.Type == JTokenType.Null ? "" : (string)value, cellRect);
+                    case FieldEditKind.Text:
+                        DrawTextCell(workspace, row, field, CellText(value), cellRect);
                         break;
-                    case JTokenType.Boolean:
-                        DrawBoolCell(workspace, row, field, (bool)value, cellRect);
+                    case FieldEditKind.Bool:
+                        DrawBoolCell(workspace, row, field, CellBool(value), cellRect);
                         break;
-                    case JTokenType.Integer:
-                        DrawLongCell(workspace, row, field, (long)value, cellRect);
+                    case FieldEditKind.Integer:
+                        DrawLongCell(workspace, row, field, CellLong(value), cellRect);
                         break;
-                    case JTokenType.Float:
-                        DrawDoubleCell(workspace, row, field, (double)value, cellRect);
+                    case FieldEditKind.Real:
+                        DrawDoubleCell(workspace, row, field, CellDouble(value), cellRect);
                         break;
-                    case JTokenType.Array:
-                        DrawArrayCell(workspace, storageIndex, field, (JArray)value, cellRect);
+                    case FieldEditKind.Array:
+                        if (value != null && value.Type == JTokenType.Array)
+                        {
+                            DrawArrayCell(workspace, storageIndex, field, (JArray)value, cellRect);
+                        }
+                        else
+                        {
+                            DrawReadOnlyCell(value ?? JValue.CreateNull(), cellRect);
+                        }
                         break;
                     default:
                         DrawReadOnlyCell(value, cellRect);
@@ -392,20 +479,73 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 }
             }
 
-            if (cellErrors != null || enumInvalid)
+            if (cellErrors != null)
             {
-                var messages = new List<string>();
-                if (cellErrors != null)
-                {
-                    messages.AddRange(cellErrors);
-                }
-                if (enumInvalid)
-                {
-                    messages.Add("非法枚举名 " + value + ",不在合法值列表内。");
-                }
                 UnityEngine.GUI.Label(
-                    cellRect, new GUIContent("", string.Join("\n", messages.ToArray())));
+                    cellRect, new GUIContent("", string.Join("\n", cellErrors.ToArray())));
             }
+        }
+
+        /// <summary>单元格按字段期望类型取显示值:实际 JSON 类型不符时显示该类型默认值,错误由校验标红指出。</summary>
+        private static string CellText(JToken value)
+        {
+            return value != null && value.Type == JTokenType.String ? (string)value : "";
+        }
+
+        private static bool CellBool(JToken value)
+        {
+            return value != null && value.Type == JTokenType.Boolean && (bool)value;
+        }
+
+        private static long CellLong(JToken value)
+        {
+            return value != null && value.Type == JTokenType.Integer ? (long)value : 0;
+        }
+
+        private static double CellDouble(JToken value)
+        {
+            if (value == null)
+            {
+                return 0;
+            }
+            if (value.Type == JTokenType.Integer)
+            {
+                return (long)value;
+            }
+            return value.Type == JTokenType.Float ? (double)value : 0;
+        }
+
+        private static bool IsListField(TableRowField field)
+        {
+            return field.FieldType.IsGenericType &&
+                field.FieldType.GetGenericTypeDefinition() == typeof(List<>);
+        }
+
+        private static FieldEditKind FieldEditKindOf(TableRowField field)
+        {
+            Type type = field.FieldType;
+            if (type == typeof(string) ||
+                (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(DataRef<>)))
+            {
+                return FieldEditKind.Text;
+            }
+            if (type == typeof(bool))
+            {
+                return FieldEditKind.Bool;
+            }
+            if (type == typeof(int) || type == typeof(long))
+            {
+                return FieldEditKind.Integer;
+            }
+            if (type == typeof(float) || type == typeof(double))
+            {
+                return FieldEditKind.Real;
+            }
+            if (IsListField(field))
+            {
+                return FieldEditKind.Array;
+            }
+            return FieldEditKind.ReadOnly;
         }
 
         private void DrawTextCell(TableWorkspace workspace, JObject row, string field, string current, Rect cellRect)
@@ -456,39 +596,30 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
         }
 
-        private void DrawComboboxCell(TableWorkspace workspace, JObject row, string field, Rect cellRect)
+        private void DrawEnumCell(
+            TableWorkspace workspace, JObject row, string field, JToken value, Rect cellRect)
         {
-            string current = ReadCellText(row, field);
+            string current = CellText(value);
             if (UnityEngine.GUI.Button(
                     cellRect, string.IsNullOrEmpty(current) ? "(空)" : current, EditorStyles.popup))
             {
-                OpenValueDropdown(workspace, row, field, cellRect);
+                OpenEnumValueDropdown(workspace, row, field, current, cellRect);
             }
         }
 
-        private void OpenValueDropdown(TableWorkspace workspace, JObject row, string field, Rect cellRect)
+        private void OpenEnumValueDropdown(
+            TableWorkspace workspace, JObject row, string field, string current, Rect cellRect)
         {
+            string[] names = workspace.EnumFields[field];
             var options = new List<(string Value, bool Enabled)>();
-            if (workspace.EnumFields.TryGetValue(field, out string[] names))
+            if (!string.IsNullOrEmpty(current) && !names.Contains(current, StringComparer.OrdinalIgnoreCase))
             {
-                foreach (string name in names)
-                {
-                    options.Add((name, true));
-                }
+                //存量非法值仅作展示项,不可选中
+                options.Add((current + " (当前值,不存在)", false));
             }
-            else
+            foreach (string name in names)
             {
-                TableReference reference = workspace.Source.References.First(item => item.FieldName == field);
-                foreach (string id in ResolveTargetIds(reference.TargetTableName))
-                {
-                    options.Add((id, true));
-                }
-            }
-            string current = ReadCellText(row, field);
-            if (!string.IsNullOrEmpty(current) && options.All(option => option.Value != current))
-            {
-                //存量悬空/非法值仅作展示项,不可选中
-                options.Insert(0, (current + " (当前值,不存在)", false));
+                options.Add((name, true));
             }
             var dropdown = new TableValueDropdown(
                 new AdvancedDropdownState(),
@@ -503,30 +634,13 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void CommitDropdownSelection(TableWorkspace workspace, JObject row, string field, string value)
         {
-            if (value == ReadCellText(row, field))
+            if (value == CellText(row[field]))
             {
                 return;
             }
             PushUndoSnapshot(workspace);
             row[field] = value;
             MarkEdited(workspace);
-        }
-
-        private static string ReadCellText(JObject row, string field)
-        {
-            JToken token = row[field];
-            if (token == null || token.Type == JTokenType.Null)
-            {
-                return "";
-            }
-            return token.ToString();
-        }
-
-        private static bool IsInvalidEnumValue(TableWorkspace workspace, string field, JToken value)
-        {
-            return workspace.EnumFields.TryGetValue(field, out string[] names) &&
-                (value.Type == JTokenType.String || value.Type == JTokenType.Null) &&
-                !names.Contains(value.ToString(), StringComparer.OrdinalIgnoreCase);
         }
 
         private void DrawArrayCell(
@@ -543,7 +657,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private static void DrawReadOnlyCell(JToken value, Rect cellRect)
         {
-            string summary = value.ToString(Newtonsoft.Json.Formatting.None);
+            string summary = value == null
+                ? ""
+                : value.ToString(Newtonsoft.Json.Formatting.None);
             if (summary.Length > 80)
             {
                 summary = summary.Substring(0, 80) + "...";
@@ -591,7 +707,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 return null;
             }
             List<string> messages = null;
-            foreach (TableEditError error in workspace.Errors)
+            foreach (TableBrowserError error in workspace.Errors)
             {
                 if (error.FieldName == field && error.EntryId == entryId)
                 {
@@ -624,7 +740,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 "校验错误 " + workspace.Errors.Count + " 条(点击定位,修改后即时刷新,不阻断保存):",
                 EditorStyles.boldLabel);
             errorListScroll = EditorGUILayout.BeginScrollView(errorListScroll);
-            foreach (TableEditError error in workspace.Errors)
+            foreach (TableBrowserError error in workspace.Errors)
             {
                 if (GUILayout.Button("  " + error, EditorStyles.label))
                 {
@@ -635,7 +751,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             EditorGUILayout.EndVertical();
         }
 
-        private void LocateError(TableWorkspace workspace, TableEditError error)
+        private void LocateError(TableWorkspace workspace, TableBrowserError error)
         {
             workspace.View.Search = "";
             if (error.EntryId != null)
@@ -748,7 +864,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             focusedCellControl = "";
             undoPushedForFocusSession = false;
             workspace.View.SelectedRow = -1;
-            RebuildColumns(workspace);
             MarkEdited(workspace);
         }
 
@@ -780,6 +895,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             try
             {
                 workspace.Rows = workspace.Source.LoadRows();
+                workspace.Source.ApplyEvolutionShape(workspace.Rows);
                 workspace.LoadError = null;
             }
             catch (Exception ex)
@@ -788,7 +904,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
             workspace.Dirty = false;
             workspace.View.SelectedRow = -1;
-            RebuildColumns(workspace);
             ValidateAll();
         }
 
@@ -807,39 +922,58 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
             TableWorkspace current = CurrentTable;
             if (current != null &&
-                string.Equals(current.Source.Path, path, StringComparison.OrdinalIgnoreCase))
+                string.Equals(current.Path, path, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
-            ITableBrowserSource source = TryCreateSourceFromSelection(path);
-            if (source == null)
+            if (!TryCreateSourceFromSelection(path, out ITableBrowserSource source, out TableHeader mismatchHeader))
             {
-                return;
-            }
-            if (current != null && current.Dirty)
-            {
-                int choice = EditorUtility.DisplayDialogComplex(
-                    "未保存的修改",
-                    "表 " + current.Source.DisplayName + " 存在未保存的修改。切换选中文件前如何处理?",
-                    "保存并切换", "留在当前表", "放弃并切换");
-                if (choice == 0)
+                if (mismatchHeader != null)
                 {
-                    SaveCurrentTable(current);
-                    if (current.Dirty)
+                    if (ConfirmDiscardIfDirty(current))
                     {
-                        return;
+                        OpenMismatchTable(mismatchHeader, path);
                     }
                 }
-                else if (choice == 2)
-                {
-                    DiscardChanges(current);
-                }
-                else
-                {
-                    //选「留在当前表」时保持显示当前表,不回改 Project 选中;下次选择变化会再次询问
-                    return;
-                }
+                return;
+            }
+            if (ConfirmDiscardIfDirty(current))
+            {
+                OpenTable(source);
+            }
+        }
+
+        /// <summary>当前表有未保存修改时先询问处置;返回是否可以切换,选「留在当前表」时返回 false。</summary>
+        private bool ConfirmDiscardIfDirty(TableWorkspace current)
+        {
+            if (current == null || current.Source == null || !current.Dirty)
+            {
+                return true;
+            }
+            int choice = EditorUtility.DisplayDialogComplex(
+                "未保存的修改",
+                "表 " + current.Source.DisplayName + " 存在未保存的修改。切换选中文件前如何处理?",
+                "保存并切换", "留在当前表", "放弃并切换");
+            if (choice == 0)
+            {
+                SaveCurrentTable(current);
+                return !current.Dirty;
+            }
+            if (choice == 2)
+            {
+                DiscardChanges(current);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>按路径打开表文件(重选类型后的重开路径);失败时仅静默返回,打开流程已呈现原因。</summary>
+        private void OpenTableFromPath(string path)
+        {
+            if (!TryCreateSourceFromSelection(path, out ITableBrowserSource source, out _))
+            {
+                return;
             }
             OpenTable(source);
         }
@@ -859,8 +993,17 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             return path.Replace('\\', '/');
         }
 
-        private static ITableBrowserSource TryCreateSourceFromSelection(string path)
+        /// <summary>
+        /// 解析选中文件并构造表源。JSON 损坏或表头非法时 log 警告且不进入编辑;
+        /// 表头行类型不在已编译类型中时经 <paramref name="mismatchHeader"/> 交回失配态。
+        /// </summary>
+        private static bool TryCreateSourceFromSelection(
+            string path,
+            out ITableBrowserSource source,
+            out TableHeader mismatchHeader)
         {
+            source = null;
+            mismatchHeader = null;
             JToken root;
             try
             {
@@ -869,30 +1012,31 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
             catch (Exception)
             {
-                //json 无法解析属非数据表文件或损坏文件,本版本静默忽略;警告呈现属后续浏览器任务
-                return null;
+                Debug.LogWarning("[Mochi] 无法打开，可能非数据表文件或数据损坏: " + path);
+                return false;
             }
             if (root.Type != JTokenType.Object ||
                 !TableHeader.TryParse((JObject)root, out TableHeader header, out _))
             {
-                return null;
+                Debug.LogWarning("[Mochi] 无法打开，可能非数据表文件或数据损坏: " + path);
+                return false;
             }
             try
             {
-                return TableBrowserSourceFactory.CreateFromHeader(header, path);
+                source = TableBrowserSourceFactory.CreateFromHeader(header, path);
+                return true;
             }
             catch (InvalidOperationException)
             {
-                //表头行类型不在已编译类型中(被重命名或删除);失配警示与重选 UI 属后续浏览器任务
-                return null;
+                //表头行类型不在已编译类型中(被重命名或删除),进入失配横幅与重选流程
+                mismatchHeader = header;
+                return false;
             }
         }
 
         private void OpenTable(ITableBrowserSource source)
         {
-            var workspace = new TableWorkspace { Source = source };
-            workspace.ReferenceFields.AddRange(
-                source.References.Select(reference => reference.FieldName).Distinct());
+            var workspace = new TableWorkspace { Source = source, Path = source.Path };
             foreach (var pair in source.EnumFields)
             {
                 workspace.EnumFields[pair.Key] = pair.Value;
@@ -900,40 +1044,25 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             try
             {
                 workspace.Rows = source.LoadRows();
+                source.ApplyEvolutionShape(workspace.Rows);
             }
             catch (Exception ex)
             {
                 workspace.LoadError = ex.Message;
             }
-            RebuildColumns(workspace);
             workspaces.Clear();
             workspaces.Add(workspace);
             displayedTable = 0;
-            keyResolver = new TableKeySetResolver();
+            RebuildColumns(workspace);
             ValidateAll();
         }
 
-        private List<string> ResolveTargetIds(string tableName)
+        private void OpenMismatchTable(TableHeader header, string path)
         {
-            var ids = new List<string>();
-            TableWorkspace target = workspaces.FirstOrDefault(item => item.Source.TableName == tableName);
-            if (target == null)
-            {
-                return ids;
-            }
-            foreach (JToken token in target.Rows)
-            {
-                if (token.Type != JTokenType.Object)
-                {
-                    continue;
-                }
-                string key = target.Source.ExtractKey((JObject)token);
-                if (!string.IsNullOrEmpty(key) && !ids.Contains(key))
-                {
-                    ids.Add(key);
-                }
-            }
-            return ids;
+            var workspace = new TableWorkspace { Source = null, Header = header, Path = path };
+            workspaces.Clear();
+            workspaces.Add(workspace);
+            displayedTable = 0;
         }
 
         private List<int> ComputeVisibleRows(TableWorkspace workspace)
@@ -991,49 +1120,34 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         {
             //当前窗口至多打开一张表,重新载入即重读这张表;无打开表时无可重载内容
             TableWorkspace workspace = CurrentTable;
-            if (workspace != null)
+            if (workspace == null)
             {
-                DiscardChanges(workspace);
+                return;
             }
+            if (workspace.Source == null)
+            {
+                workspaces.Clear();
+                displayedTable = -1;
+                return;
+            }
+            DiscardChanges(workspace);
         }
 
+        /// <summary>列只来自行类型当前字段:已删字段不再显示,保存时从文件移除;行数据里的陌生字段同理。</summary>
         private void RebuildColumns(TableWorkspace workspace)
         {
-            var columns = new List<string>();
-            try
+            workspace.View.Columns = workspace.Source.Fields
+                .Select(field => field.Name)
+                .ToList();
+            var widths = new float[workspace.View.Columns.Count];
+            for (int index = 0; index < workspace.View.Columns.Count; index++)
             {
-                columns.AddRange(workspace.Source.CreateEntryTemplate()
-                    .Properties()
-                    .Select(property => property.Name));
-            }
-            catch (Exception)
-            {
-                //行类型无法实例化时退化为仅按行数据出现过的字段建列
-            }
-            foreach (JToken token in workspace.Rows)
-            {
-                if (token.Type != JTokenType.Object)
-                {
-                    continue;
-                }
-                foreach (JProperty property in ((JObject)token).Properties())
-                {
-                    if (!columns.Contains(property.Name))
-                    {
-                        columns.Add(property.Name);
-                    }
-                }
-            }
-
-            workspace.View.Columns = columns;
-            var widths = new float[columns.Count];
-            for (int index = 0; index < columns.Count; index++)
-            {
-                Vector2 size = EditorStyles.miniButton.CalcSize(new GUIContent(columns[index]));
+                Vector2 size = EditorStyles.miniButton.CalcSize(
+                    new GUIContent(workspace.View.Columns[index]));
                 widths[index] = Mathf.Clamp(size.x + 34f, 110f, 300f);
             }
             workspace.View.ColumnWidths = widths;
-            if (workspace.View.SortColumn >= columns.Count)
+            if (workspace.View.SortColumn >= workspace.View.Columns.Count)
             {
                 workspace.View.SortColumn = -1;
             }
@@ -1041,37 +1155,15 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void ValidateAll()
         {
-            RebuildKeyResolver();
             foreach (TableWorkspace workspace in workspaces)
             {
                 workspace.Errors.Clear();
-                if (workspace.LoadError == null)
+                if (workspace.Source != null && workspace.LoadError == null)
                 {
-                    workspace.Errors.AddRange(workspace.Source.Validate(workspace.Rows, keyResolver));
+                    workspace.Errors.AddRange(workspace.Source.Validate(workspace.Rows));
                 }
             }
             Repaint();
-        }
-
-        private void RebuildKeyResolver()
-        {
-            //校验前的键集合从当前工作区内存行重建,未保存的行内修改即参与校验
-            keyResolver = new TableKeySetResolver();
-            foreach (TableWorkspace workspace in workspaces)
-            {
-                foreach (JToken row in workspace.Rows)
-                {
-                    if (row.Type != JTokenType.Object)
-                    {
-                        continue;
-                    }
-                    string key = workspace.Source.ExtractKey((JObject)row);
-                    if (!string.IsNullOrEmpty(key))
-                    {
-                        keyResolver.AddKey(workspace.Source.TableName, key);
-                    }
-                }
-            }
         }
 
         private string GenerateUniqueKey(TableWorkspace workspace)

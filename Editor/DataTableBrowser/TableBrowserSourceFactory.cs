@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Mochi.DataTable;
 using UnityEditor;
 
@@ -15,6 +16,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         /// </summary>
         /// <param name="header">文件表头。</param>
         /// <param name="path">表文件的项目相对路径,正斜杠分隔。</param>
+        /// <exception cref="ArgumentNullException">header 为 null。</exception>
         /// <exception cref="InvalidOperationException">表头 rowType 不指向任何 TableRow 派生类型。</exception>
         public static ITableBrowserSource CreateFromHeader(TableHeader header, string path)
         {
@@ -29,16 +31,35 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                     "表头行类型 " + header.RowType + " 不是已编译的 TableRow 派生类型。");
             }
 
-            Type definitionType = typeof(TableDefinition<>).MakeGenericType(rowType);
-            object definition = Activator.CreateInstance(
-                definitionType, header.Table, Array.Empty<string>());
             Type sourceType = typeof(TableBrowserSource<>).MakeGenericType(rowType);
             return (ITableBrowserSource)Activator.CreateInstance(
-                sourceType, definition, path, TableStorageKind.SingleFile, null);
+                sourceType, header.Table, path, TableStorageKind.SingleFile, null);
         }
 
-        /// <summary>在 TableRow 派生类型中按完整类名定位行类型;找不到返回 null,由调用方裁决失配。</summary>
-        private static Type FindRowType(string rowTypeFullName)
+        /// <summary>
+        /// 列出全部可直接实例化的 TableRow 派生类型,按完整类名排序;
+        /// 供新建表入口与表头失配重选下拉枚举候选项。
+        /// </summary>
+        public static IReadOnlyList<Type> ListRowTypes()
+        {
+            var types = new List<Type>();
+            foreach (Type type in TypeCache.GetTypesDerivedFrom<TableRow>())
+            {
+                if (!type.IsAbstract && !type.IsGenericTypeDefinition)
+                {
+                    types.Add(type);
+                }
+            }
+            types.Sort((left, right) => string.Compare(
+                left.FullName, right.FullName, StringComparison.OrdinalIgnoreCase));
+            return types;
+        }
+
+        /// <summary>
+        /// 在 TableRow 派生类型中按完整类名定位行类型;找不到返回 null,
+        /// 由打开流程呈现失配与重选,由双钩子检查器判定失配。
+        /// </summary>
+        public static Type FindRowType(string rowTypeFullName)
         {
             foreach (Type type in TypeCache.GetTypesDerivedFrom<TableRow>())
             {

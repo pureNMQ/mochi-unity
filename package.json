@@ -1,11 +1,11 @@
 {
   "name": "com.mochi.unity",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "displayName": "Mochi Unity",
   "description": "Mochi Unity-dependent core modules: GUI, SaveSystem, TagSystem, Logging, Helpers, MonoSingletonBase.",
   "unity": "2022.3",
   "dependencies": {
-    "com.mochi.core": "1.2.0",
+    "com.mochi.core": "2.0.0",
     "com.cysharp.unitask": "2.5.10",
     "com.unity.addressables": "1.22.3",
     "com.unity.inputsystem": "1.14.2",
