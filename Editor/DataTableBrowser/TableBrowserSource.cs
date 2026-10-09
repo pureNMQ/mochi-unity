@@ -379,29 +379,40 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 fieldsByName[field.Name] = field;
             }
 
-            var fields = new List<TableRowField>();
-            //模板属性序即序列化输出序,列序与保存字段序跟随,两侧不会漂移;
-            //但 GetFields 与 JObject.FromObject 都是派生字段先、基类字段后,
-            //键列会被排到宽表末列的水平滚动尽头而难以寻址,故键列固定提至首位
+            var orderedNames = new List<string>();
             foreach (JProperty property in template.Properties())
             {
-                if (fieldsByName.Remove(property.Name, out FieldInfo field))
+                if (fieldsByName.ContainsKey(property.Name) && !orderedNames.Contains(property.Name))
                 {
-                    fields.Add(CreateFieldMetadata(field));
+                    orderedNames.Add(property.Name);
                 }
             }
-            foreach (FieldInfo field in fieldsByName.Values)
+            foreach (string name in fieldsByName.Keys)
             {
-                fields.Add(CreateFieldMetadata(field));
+                if (!orderedNames.Contains(name))
+                {
+                    orderedNames.Add(name);
+                }
             }
-            int keyIndex = fields.FindIndex(item => item.Name == TableRow.IdFieldName);
-            if (keyIndex > 0)
+
+            //列序与保存字段序按继承层级排:基类字段在前、派生类字段在后,键 id 自然居首;
+            //GetFields 与 JObject.FromObject 都是派生先、基类后,两者的原生顺序都不采用
+            var hierarchy = new List<Type>();
+            for (Type type = typeof(TRow); type != null && type != typeof(object); type = type.BaseType)
             {
-                var keyField = fields[keyIndex];
-                fields.RemoveAt(keyIndex);
-                fields.Insert(0, keyField);
+                hierarchy.Add(type);
             }
-            return fields;
+            hierarchy.Reverse();
+            int Depth(Type declaringType)
+            {
+                int index = hierarchy.IndexOf(declaringType);
+                return index < 0 ? hierarchy.Count : index;
+            }
+            orderedNames = orderedNames
+                .OrderBy(name => Depth(fieldsByName[name].DeclaringType))
+                .ToList();
+
+            return orderedNames.ConvertAll(name => CreateFieldMetadata(fieldsByName[name]));
         }
 
         private static TableRowField CreateFieldMetadata(FieldInfo field)
