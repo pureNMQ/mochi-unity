@@ -215,11 +215,6 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 }
             }
 
-            if (GUILayout.Button("新建表", EditorStyles.toolbarButton))
-            {
-                NewDataTableDialog.Open();
-            }
-
             if (GUILayout.Button("从磁盘重新载入", EditorStyles.toolbarButton))
             {
                 ReloadFromDiskWithConfirm();
@@ -249,11 +244,25 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         private void DrawTableHeader(TableWorkspace workspace)
         {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("表名:", EditorStyles.miniBoldLabel, GUILayout.Width(38f));
+            EditorGUI.BeginChangeCheck();
+            string edited = EditorGUILayout.DelayedTextField(workspace.Source.TableName);
+            if (EditorGUI.EndChangeCheck())
+            {
+                string trimmed = edited.Trim();
+                if (!string.IsNullOrEmpty(trimmed))
+                {
+                    workspace.Source.RenameTable(trimmed);
+                    MarkEdited(workspace);
+                }
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField("行类型: " + workspace.Source.RowTypeFullName, EditorStyles.miniLabel);
+            EditorGUILayout.EndHorizontal();
             EditorGUILayout.LabelField(
-                workspace.Source.DisplayName + "  (" + workspace.Source.StorageKind + ")  条目 " +
-                workspace.Rows.Count + (workspace.Dirty ? "  未保存" : ""),
-                EditorStyles.boldLabel);
-            EditorGUILayout.LabelField(workspace.Source.Path, EditorStyles.miniLabel);
+                "条目 " + workspace.Rows.Count + (workspace.Dirty ? "  未保存" : "") + "  " + workspace.Source.Path,
+                EditorStyles.miniLabel);
         }
 
         private void DrawHint()

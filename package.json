@@ -1,6 +1,6 @@
 {
   "name": "com.mochi.unity",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "displayName": "Mochi Unity",
   "description": "Mochi Unity-dependent core modules: GUI, SaveSystem, TagSystem, Logging, Helpers, MonoSingletonBase.",
   "unity": "2022.3",

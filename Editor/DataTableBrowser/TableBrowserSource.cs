@@ -20,8 +20,8 @@ namespace Mochi.Unity.Editor.DataTableBrowser
     public sealed class TableBrowserSource<TRow> : ITableBrowserSource
         where TRow : TableRow
     {
-        private readonly string tableName;
-        private readonly string displayName;
+        private string tableName;
+        private string displayName;
         private readonly JObject entryTemplate;
 
         /// <summary>
@@ -66,6 +66,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         /// <summary>键字段名。</summary>
         public string KeyFieldName => TableRow.IdFieldName;
+
+        /// <summary>行类型的完整类名;表头信息栏只读展示用。</summary>
+        public string RowTypeFullName => typeof(TRow).FullName;
 
         /// <summary>行类型全部字段的元数据,顺序即浏览器列序与保存时的字段序。</summary>
         public IReadOnlyList<TableRowField> Fields { get; }
@@ -217,6 +220,26 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 return null;
             }
             return token.ToString();
+        }
+
+        /// <summary>
+        /// 修改表名,后续 <see cref="Save"/> 把新名写入 $table.table;文件名与路径不变。
+        /// 投产表改名须同步代码注册表的 TableName 声明,装载期表名交叉验证兜底。
+        /// </summary>
+        /// <param name="newTableName">新表名。</param>
+        /// <exception cref="ArgumentException">newTableName 为 null 或空。</exception>
+        public void RenameTable(string newTableName)
+        {
+            if (string.IsNullOrEmpty(newTableName))
+            {
+                throw new ArgumentException("表名不能为空。", nameof(newTableName));
+            }
+            //显示名默认跟随表名,仅在未被定制时同步;改名提交即置脏,由保存写入表头
+            if (displayName == tableName)
+            {
+                displayName = newTableName;
+            }
+            tableName = newTableName;
         }
 
         /// <summary>

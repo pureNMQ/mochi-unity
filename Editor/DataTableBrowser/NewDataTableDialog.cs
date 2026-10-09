@@ -10,16 +10,17 @@ using UnityEngine;
 namespace Mochi.Unity.Editor.DataTableBrowser
 {
     /// <summary>
-    /// 新建数据表对话框:填写表名并经可搜索下拉选取行类型(仅列 TableRow 派生类型),
-    /// 确认后在指定位置生成含合法 "$table" 表头与空 rows 的 .json 文件,并把 Project 选中切到新文件,
-    /// 浏览器随选中变化直接打开编辑。
+    /// 新建数据表对话框(Project 窗口 Create 菜单入口):填写表名并经可搜索下拉选取行类型
+    /// (仅列 TableRow 派生类型),确认后在发起时选中的文件夹内生成 表名.json
+    /// (含合法 "$table" 表头与空 rows),并把 Project 选中切到新文件,浏览器随选中变化直接打开编辑。
     /// </summary>
     internal sealed class NewDataTableDialog : EditorWindow
     {
         private string tableName = "";
         private string selectedRowType;
 
-        /// <summary>打开新建表对话框(工具栏「新建表」入口)。</summary>
+        /// <summary>经 Project 窗口 Create 菜单(Assets/Create/Mochi/数据表)打开新建表对话框。</summary>
+        [MenuItem("Assets/Create/Mochi/数据表", false, 60)]
         public static void Open()
         {
             GetWindow<NewDataTableDialog>(true, "新建数据表", true).minSize = new Vector2(460f, 150f);
@@ -45,7 +46,7 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             EditorGUILayout.Space();
             EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("选择位置并创建", GUILayout.Width(140f)))
+            if (GUILayout.Button("创建", GUILayout.Width(100f)))
             {
                 Create();
             }
@@ -83,25 +84,8 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 return;
             }
 
-            string chosen = EditorUtility.SaveFilePanel("新建数据表", "Assets", tableName.Trim(), "json");
-            if (string.IsNullOrEmpty(chosen))
-            {
-                return;
-            }
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string full = Path.GetFullPath(chosen);
-            if (!full.StartsWith(projectRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            {
-                EditorUtility.DisplayDialog("新建数据表", "请选择项目内的位置。", "确定");
-                return;
-            }
-            string relative = full.Substring(projectRoot.Length + 1).Replace('\\', '/');
-            if (!relative.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
-            {
-                EditorUtility.DisplayDialog("新建数据表",
-                    "数据表须生成在 Assets 目录内,才能被导入与浏览器打开。", "确定");
-                return;
-            }
+            string relative = SelectedFolder() + "/" + tableName.Trim() + ".json";
+            string full = TableBrowserSource<TableRow>.ToAbsolutePath(relative);
             if (File.Exists(full) &&
                 !EditorUtility.DisplayDialog("新建数据表",
                     "文件已存在,覆盖后将丢失原内容。继续?", "覆盖", "取消"))
@@ -129,6 +113,29 @@ namespace Mochi.Unity.Editor.DataTableBrowser
                 Selection.activeObject = asset;
             }
             Close();
+        }
+
+        /// <summary>取 Project 窗口当前选中项作为创建落点:选中文件夹用其本身,选中资产用其父文件夹,空选回退 Assets。</summary>
+        private static string SelectedFolder()
+        {
+            UnityEngine.Object selected = Selection.activeObject;
+            if (selected != null)
+            {
+                string path = AssetDatabase.GetAssetPath(selected);
+                if (!string.IsNullOrEmpty(path) && path.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (AssetDatabase.IsValidFolder(path))
+                    {
+                        return path;
+                    }
+                    string parent = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(parent))
+                    {
+                        return parent.Replace('\\', '/');
+                    }
+                }
+            }
+            return "Assets";
         }
     }
 }

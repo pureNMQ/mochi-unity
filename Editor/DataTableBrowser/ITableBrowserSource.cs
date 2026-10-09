@@ -35,6 +35,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
         /// <summary>键字段名。</summary>
         string KeyFieldName { get; }
 
+        /// <summary>行类型的完整类名;表头信息栏只读展示用。</summary>
+        string RowTypeFullName { get; }
+
         /// <summary>行类型全部字段的元数据,顺序即浏览器列序与保存时的字段序。</summary>
         IReadOnlyList<TableRowField> Fields { get; }
 
@@ -64,6 +67,14 @@ namespace Mochi.Unity.Editor.DataTableBrowser
 
         /// <summary>从行对象提取键的字符串形式;键缺失时返回 null。</summary>
         string ExtractKey(JObject row);
+
+        /// <summary>
+        /// 修改表名,后续 <see cref="Save"/> 把新名写入 $table.table;文件名与路径不变。
+        /// 投产表改名须同步代码注册表的 TableName 声明,装载期表名交叉验证兜底;浏览器不做注册表联动检测。
+        /// </summary>
+        /// <param name="newTableName">新表名。</param>
+        /// <exception cref="ArgumentException">newTableName 为 null 或空。</exception>
+        void RenameTable(string newTableName);
 
         /// <summary>
         /// 按存储形状把行数组写回磁盘:写入前按行类型当前字段整形状,仅保留当前名字段
