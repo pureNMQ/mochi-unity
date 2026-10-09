@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using Mochi.ServiceLocator;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -13,6 +14,9 @@ namespace Mochi.Unity.Preview.GUI
         public bool IsOpen { get; private set; }
         public bool IsVisible { get; private set; }
         public GameObject DefaultFocusTarget => defaultFocusTarget;
+
+        /// <summary>出生时由工厂注入的服务容器；未经工厂注入的面板为 null。</summary>
+        public ServiceProvider Services { get; private set; }
 
         /// <summary>显示完成（状态已提交）时通知外部订阅者</summary>
         public event Action<Panel> Shown;
@@ -86,6 +90,8 @@ namespace Mochi.Unity.Preview.GUI
                 return;
             }
 
+            //激活归 Open、视觉入场归 Show：OnOpen 须运行在已激活实例上
+            gameObject.SetActive(true);
             OnOpen();
             IsOpen = true;
             closing = false;
@@ -222,6 +228,11 @@ namespace Mochi.Unity.Preview.GUI
         {
             prefabLoader = loader;
             prefabHandle = prefab;
+        }
+
+        internal void BindServices(ServiceProvider services)
+        {
+            Services = services;
         }
 
         // Unity 只对曾激活过的对象保证 OnDestroy 回调，未激活实例须销毁前在此显式释放

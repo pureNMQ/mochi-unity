@@ -9,8 +9,6 @@ using UnityEngine.TestTools;
 
 namespace Mochi.Unity.Preview.GUI.Tests
 {
-    //工厂契约用例：CreateAsync 完成到 OnOpen 的全部流程（Prepare→OnOpen），实例保持失活；
-    //加载失败或缺组件返回 null；Prepare 抛错/取消由工厂收尾后原样上抛
     public class PanelFactoryTests
     {
         private readonly List<GameObject> objectsToDestroy = new List<GameObject>();
@@ -27,7 +25,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator Create_CompletesThroughOnOpen_ReturnsInactiveOpenedInstanceWithHandle()
+        public IEnumerator Create_CompletesThroughOnOpen_ReturnsActiveOpenedInstanceWithHandle()
         {
             return UniTask.ToCoroutine(async () =>
             {
@@ -38,12 +36,11 @@ namespace Mochi.Unity.Preview.GUI.Tests
                 FactoryPage panel = await PanelFactory.CreateAsync<FactoryPage>(
                     loader, "key", parent, CancellationToken.None);
 
-                //完成打开但保持失活：显示与入场由调用方决定
                 Assert.That(panel, Is.Not.Null);
                 Assert.That(panel.IsOpen, Is.True);
                 Assert.That(panel.OpenCount, Is.EqualTo(1));
                 Assert.That(panel.transform.parent, Is.EqualTo(parent));
-                Assert.That(panel.gameObject.activeSelf, Is.False);
+                Assert.That(panel.gameObject.activeSelf, Is.True);
 
                 //句柄注入后销毁自释放：恰好一次、释放来源 Prefab
                 UnityEngine.Object.DestroyImmediate(panel.gameObject);

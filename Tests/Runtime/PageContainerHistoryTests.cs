@@ -127,7 +127,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
 
             protected override void OnOpen()
             {
-                Assert.That(gameObject.activeSelf, Is.False);
+                Assert.That(gameObject.activeSelf, Is.True);
                 State++;
                 Events.Add("OnOpen");
             }
