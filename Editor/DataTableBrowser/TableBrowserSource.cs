@@ -380,7 +380,9 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             }
 
             var fields = new List<TableRowField>();
-            //模板属性序即序列化输出序:基类字段在前,列序与保存字段序跟随,两侧不会漂移
+            //模板属性序即序列化输出序,列序与保存字段序跟随,两侧不会漂移;
+            //但 GetFields 与 JObject.FromObject 都是派生字段先、基类字段后,
+            //键列会被排到宽表末列的水平滚动尽头而难以寻址,故键列固定提至首位
             foreach (JProperty property in template.Properties())
             {
                 if (fieldsByName.Remove(property.Name, out FieldInfo field))
@@ -391,6 +393,13 @@ namespace Mochi.Unity.Editor.DataTableBrowser
             foreach (FieldInfo field in fieldsByName.Values)
             {
                 fields.Add(CreateFieldMetadata(field));
+            }
+            int keyIndex = fields.FindIndex(item => item.Name == TableRow.IdFieldName);
+            if (keyIndex > 0)
+            {
+                var keyField = fields[keyIndex];
+                fields.RemoveAt(keyIndex);
+                fields.Insert(0, keyField);
             }
             return fields;
         }
