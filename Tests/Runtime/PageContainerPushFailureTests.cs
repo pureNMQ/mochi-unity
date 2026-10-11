@@ -9,7 +9,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     /// <summary>
     /// F1/R2 契约用例：committed 之前的各失败点统一经唯一 finally 收尾，

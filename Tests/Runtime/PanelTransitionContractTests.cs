@@ -7,7 +7,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     //Panel 公开同步契约用例：状态即时提交、过渡 fire-and-forget 不阻塞调用方、
     //Close 自毁自释放、closing 重入拒绝、强杀句柄必释放、Shown/Hidden/Closed 事件

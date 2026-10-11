@@ -2,7 +2,7 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     //激活与停用归 Panel 管，本组件只负责 alpha 过渡
     [RequireComponent(typeof(CanvasGroup))]

@@ -10,7 +10,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     //R4/F4 新契约用例：Back 确定关闭、不回滚——条目先移出栈（所有权转移）、
     //同步清理（实例销毁/资源释放）、异常仍传播、前页恢复交互/显示

@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     public abstract class PanelContainer : Panel
     {

@@ -1,7 +1,7 @@
 using System.Threading;
 using Cysharp.Threading.Tasks;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     public interface IPanelTransition
     {

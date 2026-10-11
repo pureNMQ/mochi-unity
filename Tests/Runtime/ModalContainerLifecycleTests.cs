@@ -10,7 +10,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     public class ModalContainerLifecycleTests
     {

@@ -2,7 +2,7 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     public interface IPanelLoader
     {

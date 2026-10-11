@@ -19,8 +19,6 @@
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [],
-    "analyzerReferences": [
-        "GUID:7125c5e104dc96745806ff434dee8229"
-    ],
+    "analyzerReferences": [],
     "noEngineReferences": false
 }

@@ -5,7 +5,7 @@ using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     public sealed class ModalContainer : StackContainer
     {

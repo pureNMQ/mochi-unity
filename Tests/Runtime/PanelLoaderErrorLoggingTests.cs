@@ -12,7 +12,7 @@ using UnityEngine.ResourceManagement.ResourceLocations;
 using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     /// <summary>
     /// R8：验证 AddressablesPanelLoader 的加载失败诊断日志。

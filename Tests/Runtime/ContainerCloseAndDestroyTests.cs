@@ -8,7 +8,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     //容器终结契约：Close 清栈并自毁、Clear 清栈保留容器、销毁中重入被拒、
     //Back 与销毁竞争不重复 Release、Busy 关闭立即接管

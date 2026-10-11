@@ -6,7 +6,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     /// <summary>
     /// Panel 生命周期幂等与 IPanel 契约验证：只测 Panel 本身，不推入容器。

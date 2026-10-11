@@ -3,7 +3,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     /// <summary>
     /// 独立 UI 根：装配 Screen Space Overlay 画布（CanvasScaler 1920x1080）与固定五层，

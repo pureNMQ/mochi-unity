@@ -8,7 +8,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     public class ModalContainerBehaviorTests
     {
@@ -26,7 +26,7 @@ namespace Mochi.Unity.Preview.GUI.Tests
                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance),
                 Is.Null);
             Assert.That(
-                typeof(ModalContainer).Assembly.GetType("Mochi.Unity.Preview.GUI.ModalHandle"),
+                typeof(ModalContainer).Assembly.GetType("Mochi.Unity.GUI.ModalHandle"),
                 Is.Null);
         }
 

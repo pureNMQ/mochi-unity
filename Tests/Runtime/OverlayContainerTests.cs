@@ -7,7 +7,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     //统一覆盖层容器用例：Open 创建即显示并登记、幂等、查询、Close 后可重建、
     //容器销毁强杀归属实例、不托管显隐；GUINavigator 根 Layer 接入与自动重建

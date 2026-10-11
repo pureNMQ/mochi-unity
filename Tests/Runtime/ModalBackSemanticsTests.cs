@@ -10,7 +10,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     //R5+F5 新契约语义用例：Back 单条目、清理后通知、失败不回滚、拒绝不通知、Push 失败集中收尾与显式焦点补偿
     public class ModalBackSemanticsTests

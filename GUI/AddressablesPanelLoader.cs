@@ -10,7 +10,7 @@ using UnityEngine.ResourceManagement.AsyncOperations;
 
 using ILogger = Mochi.Logging.ILogger;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     public sealed class AddressablesPanelLoader : IPanelLoader, IDisposable
     {

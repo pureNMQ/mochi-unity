@@ -6,7 +6,7 @@ using UnityEngine;
 
 using Object = UnityEngine.Object;
 
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     public static class PanelFactory
     {

@@ -8,7 +8,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     //容器显隐契约：容器 Hide 不传播子面板，重显按最终栈立即呈现，根 Layer 创建即显示
     public class ContainerLifecyclePropagationTests

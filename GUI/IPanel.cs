@@ -1,4 +1,4 @@
-namespace Mochi.Unity.Preview.GUI
+namespace Mochi.Unity.GUI
 {
     /// <summary>
     /// 面板公共契约：状态查询、交互控制与生命周期入口（幂等）。

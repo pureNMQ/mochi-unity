@@ -8,7 +8,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 
-namespace Mochi.Unity.Preview.GUI.Tests
+namespace Mochi.Unity.GUI.Tests
 {
     //面板未经容器自行关闭（外部直接 Close）用例：容器经 Closed 事件在其后清理——
     //与容器驱动路径（先清理后关闭）互为倒序；栈容器只抽出被关闭条目，其余条目顺序不变

@@ -1,6 +1,6 @@
 {
-    "name": "Mochi.Unity.Preview.GUI.Tests",
-    "rootNamespace": "Mochi.Unity.Preview.GUI.Tests",
+    "name": "Mochi.Unity.GUI.Tests",
+    "rootNamespace": "Mochi.Unity.GUI.Tests",
     "references": [
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
