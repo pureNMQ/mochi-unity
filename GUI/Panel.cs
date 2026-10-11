@@ -41,6 +41,8 @@ namespace Mochi.Unity.GUI
         private CanvasGroup canvasGroup;
         private GameObject savedFocusTarget;
         private bool closing;
+        private bool coverLogicalHidden;
+        private bool focusCapturedForCover;
         private IPanelLoader prefabLoader;
         private GameObject prefabHandle;
         private CancellationTokenSource transitionCancellation;
@@ -51,19 +53,38 @@ namespace Mochi.Unity.GUI
         /// <param name="enabled"></param>
         public void SetInteractable(bool enabled)
         {
-
-            if (!enabled && IsVisible)
+            //被服务遮蔽时焦点由服务在遮蔽前采集，此处不得再覆盖
+            if (!enabled && IsVisible && !focusCapturedForCover)
             {
                 SaveFocusInternal();
             }
+            focusCapturedForCover = false;
 
-            if (CanvasGroup == null)
+            CanvasGroup group = CanvasGroup;
+            if (group != null)
             {
-                return;
+                group.interactable = enabled;
+                group.blocksRaycasts = enabled;
             }
 
-            CanvasGroup.interactable = enabled;
-            CanvasGroup.blocksRaycasts = enabled;
+            if (enabled)
+            {
+                OnActivated();
+            }
+            else
+            {
+                OnDeactivated();
+            }
+        }
+
+        /// <summary>遮蔽前记录停滞的焦点，作为解除遮蔽后的恢复目标。</summary>
+        internal void CaptureFocusBeforeCover()
+        {
+            if (IsVisible)
+            {
+                SaveFocusInternal();
+                focusCapturedForCover = true;
+            }
         }
 
         /// <summary>
@@ -156,6 +177,29 @@ namespace Mochi.Unity.GUI
 
             HideCore();
             gameObject.SetActive(false);
+        }
+
+        /// <summary>遮蔽该面板：收回交互并中断在途过渡，但保留实例渲染。</summary>
+        internal void CoverInternal()
+        {
+            SetInteractable(false);
+            CancelTransition();
+            OnHide();
+            IsVisible = false;
+            coverLogicalHidden = true;
+            Hidden?.Invoke(this);
+        }
+
+        /// <summary>解除遮蔽：恢复被遮蔽前的显示态与交互，由基类的显示流程统一恢复焦点。</summary>
+        internal void UncoverInternal()
+        {
+            if (coverLogicalHidden)
+            {
+                coverLogicalHidden = false;
+                ShowImmediate();
+            }
+
+            SetInteractable(true);
         }
 
         private void HideCore()
@@ -375,6 +419,16 @@ namespace Mochi.Unity.GUI
         }
 
         protected virtual void OnShow()
+        {
+        }
+
+        /// <summary>面板经交互状态边沿转为可交互时触发；首次生效视为激活，不重复触发。</summary>
+        protected virtual void OnActivated()
+        {
+        }
+
+        /// <summary>面板被遮蔽而失去交互时触发。</summary>
+        protected virtual void OnDeactivated()
         {
         }
 
