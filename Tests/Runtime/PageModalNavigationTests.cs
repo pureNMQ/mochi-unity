@@ -102,12 +102,23 @@ namespace Mochi.Unity.GUI.Tests
         {
             PageService pages = new PageService();
             TestPanel page = CreatePanel();
+            TestPanel lowerPage = CreatePanel();
+            pages.Push(lowerPage);
             pages.Push(page);
 
             page.Close();
 
-            Assert.AreEqual(0, pages.Count);
-            Assert.IsNull(pages.Current);
+            Assert.AreEqual(1, pages.Count);
+            Assert.AreSame(lowerPage, pages.Current);
+
+            ModalService modals = new ModalService();
+            TestModal modal = CreateModal();
+            modals.Push(modal);
+
+            modal.Close();
+
+            Assert.AreEqual(0, modals.Count);
+            Assert.IsNull(modals.Current);
             yield return null;
         }
 
