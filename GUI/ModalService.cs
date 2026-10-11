@@ -47,7 +47,7 @@ namespace Mochi.Unity.GUI
         /// <summary>Closes only the top modal.</summary>
         public bool Back()
         {
-            ModalPanel modal = Current as ModalPanel;
+            ModalPanel modal = Current;
             if (modal == null)
             {
                 return false;
