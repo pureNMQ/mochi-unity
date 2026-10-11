@@ -1,16 +1,18 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using Cysharp.Threading.Tasks;
+using Mochi.ServiceLocator;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace Mochi.Unity.GUI
 {
-    /// <summary>
-    /// 面板导航服务：Page/Modal 两栈的唯一持有与协调者，并托管模态 backdrop。
-    /// </summary>
+    /// <summary>面板导航服务：Page/Modal 两栈的唯一持有与协调者，并托管模态 backdrop 与面板创建。</summary>
     /// <remarks>
     /// 两栈数据不对外暴露，避免调用方绕过本服务直接改栈。backdrop 为纯遮蔽：只压暗与阻挡被遮层输入，
     /// 无点击语义，Modal 关闭仅由面板自身出口与 <see cref="Back"/> 发起。
+    /// 面板资源地址由调用方提供或经 <see cref="PanelAddressMap"/> 解析；调用方不接触面板实例与层级。
     /// </remarks>
     public sealed class PanelStackService : MonoBehaviour
     {
@@ -21,11 +23,18 @@ namespace Mochi.Unity.GUI
         private readonly List<Panel> pageStack = new List<Panel>();
         private readonly List<ModalPanel> modalStack = new List<ModalPanel>();
         private readonly List<GameObject> backdrops = new List<GameObject>();
+        private readonly Dictionary<Panel, UniTaskCompletionSource<ModalResult<object>>> pendingResults =
+            new Dictionary<Panel, UniTaskCompletionSource<ModalResult<object>>>();
+        private readonly Dictionary<string, Panel> hudPanels = new Dictionary<string, Panel>(StringComparer.Ordinal);
 
         private RectTransform pageLayer;
         private RectTransform modalLayer;
         private CanvasGroup pageLayerCanvasGroup;
         private bool layersBound;
+        private IPanelLoader panelLoader;
+        private ServiceProvider services;
+        private PanelAddressMap addressMap;
+        private CancellationTokenSource lifetimeCancellation;
 
         /// <summary>最后一个 Page 出栈后触发。</summary>
         public event Action StackEmptied;
@@ -46,6 +55,19 @@ namespace Mochi.Unity.GUI
         /// </summary>
         public void BindLayers(RectTransform pageLayerTransform, RectTransform modalLayerTransform)
         {
+            BindLayers(pageLayerTransform, modalLayerTransform, null, null, null);
+        }
+
+        /// <summary>
+        /// 绑定 Page 层、Modal 层与面板创建所需依赖；面板资源地址经 <paramref name="panelAddressMap"/> 解析。
+        /// </summary>
+        public void BindLayers(
+            RectTransform pageLayerTransform,
+            RectTransform modalLayerTransform,
+            IPanelLoader loader,
+            ServiceProvider panelServices = null,
+            PanelAddressMap panelAddressMap = null)
+        {
             if (pageLayerTransform == null)
             {
                 throw new ArgumentNullException(nameof(pageLayerTransform));
@@ -64,7 +86,196 @@ namespace Mochi.Unity.GUI
             pageLayer = pageLayerTransform;
             modalLayer = modalLayerTransform;
             pageLayerCanvasGroup = ResolveLayerCanvasGroup(pageLayer);
+            panelLoader = loader;
+            services = panelServices ?? Services.Root ?? new ServiceProvider();
+            addressMap = panelAddressMap ?? new PanelAddressMap();
+            lifetimeCancellation = new CancellationTokenSource();
             layersBound = true;
+        }
+
+        /// <summary>
+        /// 异步创建并推入页面；<paramref name="address"/> 省略时按类型经地址映射解析。
+        /// </summary>
+        public async UniTask<TPanel> PushPageAsync<TPanel>(string address = null) where TPanel : Panel
+        {
+            RequireLayers();
+            TPanel page = await PanelFactory.CreateAsync<TPanel>(
+                panelLoader, ResolveAddress<TPanel>(address), pageLayer, services, LifetimeToken);
+            if (page == null)
+            {
+                return null;
+            }
+
+            Push(page);
+            return page;
+        }
+
+        /// <summary>
+        /// 异步创建并推入带数据页面；<paramref name="address"/> 省略时按类型经地址映射解析。
+        /// </summary>
+        public async UniTask<TPanel> PushPageAsync<TPanel, TData>(TData data, string address = null)
+            where TPanel : Panel<TData>
+        {
+            RequireLayers();
+            TPanel page = await PanelFactory.CreateAsync<TPanel, TData>(
+                panelLoader, ResolveAddress<TPanel>(address), pageLayer, data, services, LifetimeToken);
+            if (page == null)
+            {
+                return null;
+            }
+
+            Push(page);
+            return page;
+        }
+
+        /// <summary>
+        /// 异步创建并推入弹窗；结果经 <see cref="GetModalResult{TPanel,TResult}"/> 等待。
+        /// </summary>
+        public async UniTask<TPanel> PushModalAsync<TPanel, TData, TResult>(TData data, string address = null)
+            where TPanel : ModalPanel<TData, TResult>
+        {
+            RequireLayers();
+            TPanel modal = await PanelFactory.CreateAsync<TPanel, TData, TResult>(
+                panelLoader, ResolveAddress<TPanel>(address), modalLayer, data, services, LifetimeToken);
+            if (modal == null)
+            {
+                return null;
+            }
+
+            Push(modal);
+            return modal;
+        }
+
+        /// <summary>
+        /// 等待弹窗结果：玩家以结果语义关闭时返回该结果，经 back 或外部路径关闭时返回取消信号。
+        /// </summary>
+        public UniTask<ModalResult<TResult>> GetModalResult<TPanel, TResult>(TPanel modal)
+            where TPanel : ModalPanel<TResult>
+        {
+            if (modal == null)
+            {
+                return UniTask.FromResult(ModalResult<TResult>.Cancelled());
+            }
+
+            UniTaskCompletionSource<ModalResult<object>> completionSource =
+                new UniTaskCompletionSource<ModalResult<object>>();
+            pendingResults[modal] = completionSource;
+            modal.ResultReturned += (hasResult, result) =>
+            {
+                pendingResults.Remove(modal);
+                completionSource.TrySetResult(ModalResult<object>.Create(hasResult, result));
+            };
+            return AwaitTypedResultAsync<TPanel, TResult>(modal, completionSource);
+        }
+
+        private static async UniTask<ModalResult<TResult>> AwaitTypedResultAsync<TPanel, TResult>(
+            TPanel modal,
+            UniTaskCompletionSource<ModalResult<object>> completionSource) where TPanel : ModalPanel<TResult>
+        {
+            ModalResult<object> raw = await completionSource.Task;
+            if (!raw.HasResult)
+            {
+                return ModalResult<TResult>.Cancelled();
+            }
+
+            TResult typed = raw.Result is TResult result ? result : default;
+            return ModalResult<TResult>.Create(true, typed);
+        }
+
+        /// <summary>打开常驻 HUD 面板；同一地址重复打开返回既有实例。</summary>
+        public async UniTask<TPanel> OpenHudAsync<TPanel>(string address = null) where TPanel : Panel
+        {
+            RequireLayers();
+            string resolved = ResolveAddress<TPanel>(address);
+            if (hudPanels.TryGetValue(resolved, out Panel existing))
+            {
+                return existing as TPanel;
+            }
+
+            TPanel panel = await PanelFactory.CreateAsync<TPanel>(
+                panelLoader, resolved, HudLayer, services, LifetimeToken);
+            if (panel == null)
+            {
+                return null;
+            }
+
+            hudPanels[resolved] = panel;
+            panel.Closed += OnHudPanelClosed;
+            panel.Show();
+            return panel;
+        }
+
+        /// <summary>关闭常驻 HUD 面板并从服务登记中移除。</summary>
+        public bool CloseHud(Panel panel)
+        {
+            if (panel == null)
+            {
+                return false;
+            }
+
+            foreach (KeyValuePair<string, Panel> entry in hudPanels)
+            {
+                if (ReferenceEquals(entry.Value, panel))
+                {
+                    hudPanels.Remove(entry.Key);
+                    break;
+                }
+            }
+
+            panel.Closed -= OnHudPanelClosed;
+            panel.Close();
+            return true;
+        }
+
+        private RectTransform HudLayer => modalLayer.parent.Find("HUDLayer") as RectTransform;
+
+        private void OnHudPanelClosed(Panel panel)
+        {
+            panel.Closed -= OnHudPanelClosed;
+            foreach (KeyValuePair<string, Panel> entry in hudPanels)
+            {
+                if (ReferenceEquals(entry.Value, panel))
+                {
+                    hudPanels.Remove(entry.Key);
+                    break;
+                }
+            }
+        }
+
+        private string ResolveAddress<TPanel>(string address) where TPanel : Panel
+        {
+            if (!string.IsNullOrEmpty(address))
+            {
+                return address;
+            }
+
+            if (addressMap.TryGetAddress(typeof(TPanel), out string mapped))
+            {
+                return mapped;
+            }
+
+            return typeof(TPanel).Name;
+        }
+
+        private CancellationToken LifetimeToken =>
+            lifetimeCancellation == null ? CancellationToken.None : lifetimeCancellation.Token;
+
+        private void OnDestroy()
+        {
+            lifetimeCancellation?.Cancel();
+            lifetimeCancellation?.Dispose();
+            lifetimeCancellation = null;
+
+            foreach (Panel panel in new List<Panel>(hudPanels.Values))
+            {
+                if (panel != null)
+                {
+                    panel.Closed -= OnHudPanelClosed;
+                    panel.CloseImmediate();
+                }
+            }
+
+            hudPanels.Clear();
         }
 
         /// <summary>
@@ -115,6 +326,12 @@ namespace Mochi.Unity.GUI
             return PopTopPage();
         }
 
+        /// <summary>以结果语义完成栈顶 Modal；调用方不需接触面板的结果通道。</summary>
+        public bool CompleteModal<TResult>(ModalPanel<TResult> modal, TResult result)
+        {
+            return Complete(modal, result);
+        }
+
         /// <summary>服务内部关闭栈顶 Modal，继承 <see cref="ModalPanel"/> 的取消语义。</summary>
         internal bool Cancel(ModalPanel modal)
         {
@@ -135,7 +352,14 @@ namespace Mochi.Unity.GUI
                 return false;
             }
 
+            //结果先于关闭交付：关闭流程会给未决等待按取消收场，顺序反了会把玩家选择覆盖成取消
             Action notification = modal.CaptureResultNotification(true, result);
+            if (pendingResults.TryGetValue(modal, out UniTaskCompletionSource<ModalResult<object>> pending))
+            {
+                pendingResults.Remove(modal);
+                pending.TrySetResult(ModalResult<object>.Create(true, result));
+            }
+
             modal.Close();
             notification?.Invoke();
             return true;
@@ -252,6 +476,16 @@ namespace Mochi.Unity.GUI
 
             closedModal.Closed -= OnModalClosed;
             closedModal.UnbindService();
+
+            //结果语义的完成路径已在关闭前交付并移除挂起项；此处只兜底场外关闭，
+            //避免调用方永久等待，并清空该面板已捕获的结果回调防止泄漏
+            if (pendingResults.TryGetValue(closedModal, out UniTaskCompletionSource<ModalResult<object>> pending))
+            {
+                pendingResults.Remove(closedModal);
+                closedModal.CaptureResultNotification(false, null);
+                pending.TrySetResult(ModalResult<object>.Cancelled());
+            }
+
             int index = modalStack.IndexOf(closedModal);
             modalStack.RemoveAt(index);
             DestroyBackdropAt(index);

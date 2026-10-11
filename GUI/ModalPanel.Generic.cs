@@ -24,6 +24,21 @@ namespace Mochi.Unity.GUI
                 : Container.CompleteAsync(this, result);
         }
 
+        /// <summary>以结果语义关闭本弹窗并交付结果；面板自身出口与外部调用共用同一路径。</summary>
+        public void CompleteWithResult(TResult result)
+        {
+            if (Service != null)
+            {
+                Service.Complete(this, result);
+                return;
+            }
+
+            if (Container != null)
+            {
+                Container.CompleteAsync(this, result).Forget();
+            }
+        }
+
         //强类型绑定结果回调：调用方已知 TResult，无需先擦除为 Delegate 再 as 转回，类型不匹配由编译期发现
         internal void BindResultCallback(ModalResultCallback<TResult> callback)
         {
