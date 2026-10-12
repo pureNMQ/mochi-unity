@@ -55,6 +55,28 @@ namespace Mochi.Unity.GUI
         /// <summary>Toast 层（第 4 层）；仅供同程序集的 ToastService 使用，不向应用暴露公共访问口。</summary>
         internal RectTransform Toast => EnsureLayer(ref toast, ToastLayerObjectName, 4);
 
+        /// <summary>解析指定 GUI 层；None 返回 null，其他层按固定绘制顺序懒加载。</summary>
+        public RectTransform GetLayer(GUILayer layer)
+        {
+            switch (layer)
+            {
+                case GUILayer.HUD:
+                    return HUD;
+                case GUILayer.Page:
+                    return Page;
+                case GUILayer.Modal:
+                    return Modal;
+                case GUILayer.Transition:
+                    return Transition;
+                case GUILayer.Toast:
+                    return Toast;
+                case GUILayer.None:
+                    return null;
+                default:
+                    throw new System.ArgumentOutOfRangeException(nameof(layer), layer, null);
+            }
+        }
+
         private void Awake()
         {
             if (instance != null && instance != this)

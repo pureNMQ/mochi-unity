@@ -4,7 +4,6 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using Mochi.ServiceLocator;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace Mochi.Unity.GUI
 {
@@ -16,13 +15,8 @@ namespace Mochi.Unity.GUI
     /// </remarks>
     public sealed class PanelStackService : MonoBehaviour
     {
-        private const string BackdropObjectName = "ModalBackdrop";
-
-        [SerializeField] private Color backdropColor = new Color(0f, 0f, 0f, 0.55f);
-
         private readonly List<Panel> pageStack = new List<Panel>();
         private readonly List<ModalPanel> modalStack = new List<ModalPanel>();
-        private readonly List<GameObject> backdrops = new List<GameObject>();
         private readonly Dictionary<Panel, UniTaskCompletionSource<ModalResult<object>>> pendingResults =
             new Dictionary<Panel, UniTaskCompletionSource<ModalResult<object>>>();
         private readonly Dictionary<string, Panel> hudPanels = new Dictionary<string, Panel>(StringComparer.Ordinal);
@@ -33,6 +27,7 @@ namespace Mochi.Unity.GUI
         private bool layersBound;
         private IPanelLoader panelLoader;
         private ServiceProvider services;
+        private GUIService guiService;
         private PanelAddressMap addressMap;
         private CancellationTokenSource lifetimeCancellation;
 
@@ -43,8 +38,8 @@ namespace Mochi.Unity.GUI
         public int PageCount => pageStack.Count;
         /// <summary>Modal 栈条目数。</summary>
         public int ModalCount => modalStack.Count;
-        /// <summary>在场 backdrop 层数，与 Modal 栈条目一一对应。</summary>
-        public int BackdropCount => backdrops.Count;
+        /// <summary>兼容旧查询；最终架构不创建 backdrop。</summary>
+        public int BackdropCount => 0;
         /// <summary>Page 栈顶，栈空时为 null。</summary>
         public Panel CurrentPage => pageStack.Count == 0 ? null : pageStack[pageStack.Count - 1];
         /// <summary>Modal 栈顶，栈空时为 null。</summary>
@@ -56,6 +51,22 @@ namespace Mochi.Unity.GUI
         public void BindLayers(RectTransform pageLayerTransform, RectTransform modalLayerTransform)
         {
             BindLayers(pageLayerTransform, modalLayerTransform, null, null, null);
+        }
+
+        public void BindLayers(GUIService service, PanelAddressMap panelAddressMap = null)
+        {
+            if (service == null)
+            {
+                throw new ArgumentNullException(nameof(service));
+            }
+
+            guiService = service;
+            BindLayers(
+                service.GetLayer(GUILayer.Page),
+                service.GetLayer(GUILayer.Modal),
+                null,
+                null,
+                panelAddressMap);
         }
 
         /// <summary>
@@ -99,8 +110,10 @@ namespace Mochi.Unity.GUI
         public async UniTask<TPanel> PushPageAsync<TPanel>(string address = null) where TPanel : Panel
         {
             RequireLayers();
-            TPanel page = await PanelFactory.CreateAsync<TPanel>(
-                panelLoader, ResolveAddress<TPanel>(address), pageLayer, services, LifetimeToken);
+            TPanel page = guiService != null
+                ? await guiService.CreatePanelAsync<TPanel>(ResolveAddress<TPanel>(address))
+                : await PanelFactory.CreateAsync<TPanel>(
+                    panelLoader, ResolveAddress<TPanel>(address), pageLayer, services, LifetimeToken);
             if (page == null)
             {
                 return null;
@@ -117,8 +130,10 @@ namespace Mochi.Unity.GUI
             where TPanel : Panel<TData>
         {
             RequireLayers();
-            TPanel page = await PanelFactory.CreateAsync<TPanel, TData>(
-                panelLoader, ResolveAddress<TPanel>(address), pageLayer, data, services, LifetimeToken);
+            TPanel page = guiService != null
+                ? await guiService.CreatePanelAsync<TPanel, TData>(data, ResolveAddress<TPanel>(address))
+                : await PanelFactory.CreateAsync<TPanel, TData>(
+                    panelLoader, ResolveAddress<TPanel>(address), pageLayer, data, services, LifetimeToken);
             if (page == null)
             {
                 return null;
@@ -135,8 +150,10 @@ namespace Mochi.Unity.GUI
             where TPanel : ModalPanel<TData, TResult>
         {
             RequireLayers();
-            TPanel modal = await PanelFactory.CreateAsync<TPanel, TData, TResult>(
-                panelLoader, ResolveAddress<TPanel>(address), modalLayer, data, services, LifetimeToken);
+            TPanel modal = guiService != null
+                ? await guiService.CreateModalAsync<TPanel, TData, TResult>(data, ResolveAddress<TPanel>(address))
+                : await PanelFactory.CreateAsync<TPanel, TData, TResult>(
+                    panelLoader, ResolveAddress<TPanel>(address), modalLayer, data, services, LifetimeToken);
             if (modal == null)
             {
                 return null;
@@ -296,6 +313,7 @@ namespace Mochi.Unity.GUI
             }
 
             RequireLayers();
+            CloseAllModals();
             PushPage(panel);
         }
 
@@ -316,10 +334,9 @@ namespace Mochi.Unity.GUI
         {
             RequireLayers();
 
-            ModalPanel modal = CurrentModal;
-            if (modal != null)
+            if (modalStack.Count > 0)
             {
-                modal.Close();
+                CloseAllModals();
                 return true;
             }
 
@@ -375,7 +392,6 @@ namespace Mochi.Unity.GUI
                     continue;
                 }
 
-                pageStack[index].Closed -= OnPageClosed;
                 pageStack.RemoveAt(index);
             }
 
@@ -402,7 +418,6 @@ namespace Mochi.Unity.GUI
 
             modal.transform.SetParent(modalLayer, false);
             modalStack.Add(modal);
-            backdrops.Add(CreateBackdrop(modal));
             modal.Closed += OnModalClosed;
             modal.BindService(this);
 
@@ -488,7 +503,6 @@ namespace Mochi.Unity.GUI
 
             int index = modalStack.IndexOf(closedModal);
             modalStack.RemoveAt(index);
-            DestroyBackdropAt(index);
 
             //先按剩余栈重算遮蔽：Page 层与下层 Modal 的锁随栈顶变化即时更新
             RefreshCoverage();
@@ -500,6 +514,14 @@ namespace Mochi.Unity.GUI
             else
             {
                 CurrentModal.UncoverInternal();
+            }
+        }
+
+        private void CloseAllModals()
+        {
+            while (CurrentModal != null)
+            {
+                CurrentModal.Close();
             }
         }
 
@@ -558,53 +580,6 @@ namespace Mochi.Unity.GUI
             for (int index = 0; index < modalStack.Count; index++)
             {
                 modalStack[index]?.CaptureFocusBeforeCover();
-            }
-        }
-
-        //每个 Modal 各配一层 backdrop，插入到该 Modal 之前：backdrop 恒在所属 Modal 之下，且自动叠在更低层的 backdrop 与 Modal 之上
-        private GameObject CreateBackdrop(ModalPanel modal)
-        {
-            GameObject backdropObject = new GameObject(
-                BackdropObjectName,
-                typeof(RectTransform),
-                typeof(CanvasRenderer),
-                typeof(Image),
-                typeof(CanvasGroup));
-            RectTransform backdropRect = backdropObject.GetComponent<RectTransform>();
-            backdropRect.SetParent(modalLayer, false);
-            backdropRect.anchorMin = Vector2.zero;
-            backdropRect.anchorMax = Vector2.one;
-            backdropRect.offsetMin = Vector2.zero;
-            backdropRect.offsetMax = Vector2.zero;
-            backdropRect.localScale = Vector3.one;
-
-            //backdrop 先落到 Modal 层末尾，再插到所属 Modal 当前位次，所属 Modal 顺势后移一位
-            int panelIndex = modal.transform.GetSiblingIndex();
-            backdropRect.SetSiblingIndex(Mathf.Max(0, panelIndex));
-
-            Image backdropImage = backdropObject.GetComponent<Image>();
-            backdropImage.color = backdropColor;
-            backdropImage.raycastTarget = true;
-
-            CanvasGroup backdropCanvasGroup = backdropObject.GetComponent<CanvasGroup>();
-            backdropCanvasGroup.alpha = backdropColor.a;
-            backdropCanvasGroup.interactable = true;
-            backdropCanvasGroup.blocksRaycasts = true;
-            return backdropObject;
-        }
-
-        private void DestroyBackdropAt(int index)
-        {
-            if (index < 0 || index >= backdrops.Count)
-            {
-                return;
-            }
-
-            GameObject backdropObject = backdrops[index];
-            backdrops.RemoveAt(index);
-            if (backdropObject != null)
-            {
-                UnityEngine.Object.Destroy(backdropObject);
             }
         }
 

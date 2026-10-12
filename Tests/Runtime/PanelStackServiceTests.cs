@@ -49,10 +49,10 @@ namespace Mochi.Unity.GUI.Tests
             Assert.IsNotNull(push);
             Assert.AreEqual(typeof(Panel), push.GetParameters()[0].ParameterType);
 
-            //旧服务形态完全退役：类型不再存在
+            //旧栈持有者类型退役，ModalService 仅保留语义门面
             Assert.IsNull(typeof(PanelStackService).Assembly.GetType("Mochi.Unity.GUI.NavigationService"));
             Assert.IsNull(typeof(PanelStackService).Assembly.GetType("Mochi.Unity.GUI.PageService"));
-            Assert.IsNull(typeof(PanelStackService).Assembly.GetType("Mochi.Unity.GUI.ModalService"));
+            Assert.IsNotNull(typeof(PanelStackService).Assembly.GetType("Mochi.Unity.GUI.ModalService"));
 
             //服务把两类面板分别挂到绑定层，调用方无需自行处理挂载
             Assert.AreSame(pageLayer, page.transform.parent);
@@ -111,18 +111,15 @@ namespace Mochi.Unity.GUI.Tests
             service.Push(lowerModal);
             service.Push(topModal);
 
-            //Modal 栈非空：back 只关栈顶 Modal，Page 栈不动，下层 Modal 恢复呈现
-            Assert.IsTrue(service.Back());
-            Assert.AreEqual(1, service.ModalCount);
-            Assert.AreSame(lowerModal, service.CurrentModal);
-            Assert.AreEqual(2, service.PageCount);
-            Assert.IsTrue(lowerModal.IsVisible);
-            Assert.IsTrue(lowerModal.gameObject.activeSelf);
-
-            //Modal 清空后：Page 多于一个时 pop 栈顶并恢复下层
+            //Modal 栈非空：back 先关闭全部 Modal，Page 栈保持不变
             Assert.IsTrue(service.Back());
             Assert.AreEqual(0, service.ModalCount);
+            Assert.IsNull(service.CurrentModal);
             Assert.AreEqual(2, service.PageCount);
+            Assert.IsFalse(lowerModal.IsOpen);
+            Assert.IsFalse(topModal.IsOpen);
+
+            //Modal 清空后：Page 多于一个时 pop 栈顶并恢复下层
             Assert.IsTrue(service.Back());
             Assert.AreEqual(1, service.PageCount);
             Assert.AreSame(first, service.CurrentPage);
@@ -244,42 +241,24 @@ namespace Mochi.Unity.GUI.Tests
         }
 
         [UnityTest]
-        // 验收条件 AC7M: backdrop 由服务持有管理、多 Modal 并存时逐层叠加且下层可辨认，backdrop 自身无点击行为。
-        public IEnumerator NestedModals_LayerBackdropsBehindEachModalWithoutClickSemantics()
+        // 验收条件 AC7M：Modal 层不创建 Backdrop，嵌套 Modal 仍保持栈顶交互与下层可辨认。
+        public IEnumerator NestedModals_DoNotCreateBackdropsAndKeepStackPanels()
         {
             PanelStackService service = CreateService(out _, out RectTransform modalLayer);
             TestModal first = CreateModal("First");
             TestModal second = CreateModal("Second");
 
             service.Push(first);
-            Assert.AreEqual(1, service.BackdropCount);
-            Transform firstBackdrop = FindBackdrop(modalLayer, 0);
-            Assert.IsNotNull(firstBackdrop);
-            AssertBackdropIsPresent(firstBackdrop);
-            AssertBackdropHasNoClickHandler(firstBackdrop);
-
             service.Push(second);
-            Assert.AreEqual(2, service.BackdropCount);
-            Transform secondBackdrop = FindBackdrop(modalLayer, 1);
-            Assert.IsNotNull(secondBackdrop);
 
-            //每个 backdrop 恒在自己的 Modal 之下，因而叠在更低层的 backdrop 与 Modal 之上
-            Assert.AreEqual(first.transform.GetSiblingIndex() - 1, firstBackdrop.GetSiblingIndex());
-            Assert.AreEqual(second.transform.GetSiblingIndex() - 1, secondBackdrop.GetSiblingIndex());
-            Assert.Less(firstBackdrop.GetSiblingIndex(), secondBackdrop.GetSiblingIndex());
-            Assert.Less(secondBackdrop.GetSiblingIndex(), second.transform.GetSiblingIndex());
-
-            //backdrop 没有点击处理，且可交互以挡住下层输入
-            AssertBackdropHasNoClickHandler(secondBackdrop);
-            CanvasGroup secondBackdropGroup = secondBackdrop.GetComponent<CanvasGroup>();
-            Assert.IsTrue(secondBackdropGroup.blocksRaycasts);
-            Assert.IsTrue(secondBackdropGroup.interactable);
-
-            second.Close();
-            Assert.AreEqual(1, service.BackdropCount);
-            //backdrop 用 Destroy 回收，帧末才真正移除
+            Assert.AreEqual(0, service.BackdropCount);
+            Assert.AreEqual(2, service.ModalCount);
+            Assert.IsTrue(first.gameObject.activeSelf);
+            Assert.IsTrue(second.gameObject.activeSelf);
+            Assert.IsFalse(first.Interactable);
+            Assert.IsTrue(second.Interactable);
+            Assert.AreEqual(2, modalLayer.childCount);
             yield return null;
-            Assert.IsNull(FindBackdrop(modalLayer, 1));
         }
 
         private PanelStackService CreateService(out RectTransform pageLayer, out RectTransform modalLayer)
