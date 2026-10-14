@@ -30,7 +30,12 @@ namespace Mochi.Unity.GUI.Tests
         // 验收条件 AC13：ToastService.Show 显示 Toast 并自动关闭，调用方不接触 Toast Panel。
         public void ToastService_ExposesPanelFreeShowContract()
         {
-            MethodInfo show = typeof(ToastService).GetMethod("Show");
+            MethodInfo show = typeof(ToastService).GetMethod(
+                "Show",
+                BindingFlags.Instance | BindingFlags.Public,
+                null,
+                new[] { typeof(string), typeof(float) },
+                null);
             Assert.That(show, Is.Not.Null);
             Assert.That(show.IsGenericMethodDefinition, Is.True);
             Assert.That(show.ReturnType, Is.EqualTo(typeof(UniTask)));
