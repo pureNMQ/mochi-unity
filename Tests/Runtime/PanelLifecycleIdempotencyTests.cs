@@ -123,7 +123,6 @@ namespace Mochi.Unity.GUI.Tests
         {
             return UniTask.ToCoroutine(async () =>
             {
-                //容器（PageContainer/ModalContainer）自身从不 Open，却复用 OnClose 做栈清理；
                 //从未打开的面板首次 Close 仍执行一次清理，之后重复 Close 为空操作
                 CountingPanel panel = CreatePanel();
                 panel.Close();

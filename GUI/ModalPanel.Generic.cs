@@ -11,17 +11,10 @@ namespace Mochi.Unity.GUI
 
         public event ModalResultCallback<TResult> ResultReturned;
 
-        //服务绑定优先：最终架构下结果交付归 PanelStackService；容器绑定为旧路径，待调用面迁移后随容器退役
+        //结果交付归 PanelStackService；服务未绑定时无人可交付，按未完成处理
         protected UniTask<bool> CompleteAsync(TResult result)
         {
-            if (Service != null)
-            {
-                return UniTask.FromResult(Service.Complete(this, result));
-            }
-
-            return Container == null
-                ? UniTask.FromResult(false)
-                : Container.CompleteAsync(this, result);
+            return Service == null ? UniTask.FromResult(false) : UniTask.FromResult(Service.Complete(this, result));
         }
 
         /// <summary>以结果语义关闭本弹窗并交付结果；面板自身出口与外部调用共用同一路径。</summary>
@@ -30,12 +23,6 @@ namespace Mochi.Unity.GUI
             if (Service != null)
             {
                 Service.Complete(this, result);
-                return;
-            }
-
-            if (Container != null)
-            {
-                Container.CompleteAsync(this, result).Forget();
             }
         }
 
