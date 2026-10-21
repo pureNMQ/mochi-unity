@@ -23,21 +23,21 @@ namespace Mochi.Unity.GUI
         }
 
         /// <summary>
-        /// 使用当前组合根容器或独立容器，在 Prepare 前完成注入；返回后须另行调用 Show。
+        /// 使用当前组合根容器或独立容器，在 Prepare 前完成注入；数据在激活前应用；返回后须另行调用 Show。
         /// </summary>
         public static UniTask<TPanel> CreateAsync<TPanel, TData>(
             IPanelLoader loader,
             string key,
             Transform parent,
             TData data,
-            CancellationToken cancellationToken) where TPanel : Panel<TData>
+            CancellationToken cancellationToken) where TPanel : Panel, IDataPanel<TData>
         {
             return CreateAsync<TPanel, TData>(
                 loader, key, parent, data, Services.Root ?? new ServiceProvider(), cancellationToken);
         }
 
         /// <summary>
-        /// 使用当前组合根容器或独立容器，在 Prepare 前完成注入；返回后须另行调用 Show。
+        /// 使用当前组合根容器或独立容器，在 Prepare 前完成注入；数据在激活前应用；返回后须另行调用 Show。
         /// </summary>
         public static UniTask<TPanel> CreateAsync<TPanel, TData, TResult>(
             IPanelLoader loader,
@@ -66,11 +66,12 @@ namespace Mochi.Unity.GUI
                 parent,
                 services,
                 (panel, token) => panel.PrepareInternalAsync(token),
+                null,
                 cancellationToken);
         }
 
         /// <summary>
-        /// 创建并完成 Prepare 与 Open 的 <typeparamref name="TData"/> 数据面板；
+        /// 创建并完成 Prepare、数据应用与 Open 的 <typeparamref name="TData"/> 数据面板；
         /// 非空的 <paramref name="services"/> 于 Prepare 前绑定到面板；返回后须另行调用 Show。
         /// </summary>
         public static UniTask<TPanel> CreateAsync<TPanel, TData>(
@@ -79,19 +80,20 @@ namespace Mochi.Unity.GUI
             Transform parent,
             TData data,
             ServiceProvider services,
-            CancellationToken cancellationToken) where TPanel : Panel<TData>
+            CancellationToken cancellationToken) where TPanel : Panel, IDataPanel<TData>
         {
             return CreateCoreAsync<TPanel>(
                 loader,
                 key,
                 parent,
                 services,
-                (panel, token) => panel.PrepareInternalAsync(data, token),
+                (panel, token) => panel.PrepareInternalAsync(token),
+                panel => ((IDataPanel<TData>)panel).ApplyData(data),
                 cancellationToken);
         }
 
         /// <summary>
-        /// 创建并完成 Prepare 与 Open 的 <typeparamref name="TData"/> 数据、
+        /// 创建并完成 Prepare、数据应用与 Open 的 <typeparamref name="TData"/> 数据、
         /// <typeparamref name="TResult"/> 结果模态面板；非空的 <paramref name="services"/> 于 Prepare 前绑定到面板；返回后须另行调用 Show。
         /// </summary>
         public static UniTask<TPanel> CreateAsync<TPanel, TData, TResult>(
@@ -107,17 +109,19 @@ namespace Mochi.Unity.GUI
                 key,
                 parent,
                 services,
-                (panel, token) => panel.PrepareInternalAsync(data, token),
+                (panel, token) => panel.PrepareInternalAsync(token),
+                panel => ((IDataPanel<TData>)panel).ApplyData(data),
                 cancellationToken);
         }
 
-        //重载只决定 Prepare 的数据形态，创建到打开的主体收敛在私有核心
+        //重载只决定 Prepare 与数据两个委托的形态，创建到打开的主体收敛在私有核心。
         private static async UniTask<TPanel> CreateCoreAsync<TPanel>(
             IPanelLoader loader,
             string key,
             Transform parent,
             ServiceProvider services,
             Func<TPanel, CancellationToken, UniTask> prepareAsync,
+            Action<TPanel> applyData,
             CancellationToken cancellationToken) where TPanel : Panel
         {
             if (services == null)
@@ -154,7 +158,12 @@ namespace Mochi.Unity.GUI
 
                 await prepareAsync(panel, cancellationToken);
 
+                //Prepare 可正常返回而令牌已取消，此处拦下，取消的实例不进入激活
                 cancellationToken.ThrowIfCancellationRequested();
+
+                //数据在激活前应用：OnOpen 可以直接读取本次呈现的数据
+                applyData?.Invoke(panel);
+
                 panel.OpenInternal();
                 return panel;
             }

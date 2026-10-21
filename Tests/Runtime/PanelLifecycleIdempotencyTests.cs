@@ -183,14 +183,14 @@ namespace Mochi.Unity.GUI.Tests
         }
 
         [UnityTest]
-        public IEnumerator IPanelContract_ExposesStateInteractabilityAndLifecycle()
+        public IEnumerator StateLifecycleContract_AndInteractivePanelInteractability()
         {
             return UniTask.ToCoroutine(async () =>
             {
                 CountingPanel panel = CreatePanel();
                 InvokeOpenInternal(panel);
 
-                //经公共契约访问：状态查询、交互控制与生命周期入口
+                //经公共契约访问：状态查询与生命周期入口
                 IPanel contract = panel;
                 Assert.That(contract.IsOpen, Is.True);
 
@@ -199,11 +199,13 @@ namespace Mochi.Unity.GUI.Tests
                 contract.Hide();
                 Assert.That(contract.IsVisible, Is.False);
 
-                contract.SetInteractable(false);
+                //交互开关只属于可交互面板契约
+                IInteractivePanel interactive = panel;
+                interactive.SetInteractable(false);
                 Assert.That(panel.CanvasGroup.interactable, Is.False);
                 Assert.That(panel.CanvasGroup.blocksRaycasts, Is.False);
 
-                contract.SetInteractable(true);
+                interactive.SetInteractable(true);
                 Assert.That(panel.CanvasGroup.interactable, Is.True);
                 Assert.That(panel.CanvasGroup.blocksRaycasts, Is.True);
                 await UniTask.Yield();
@@ -239,7 +241,7 @@ namespace Mochi.Unity.GUI.Tests
             return target;
         }
 
-        private sealed class CountingPanel : Panel
+        private sealed class CountingPanel : InteractivePanel
         {
             public int OpenCount { get; private set; }
             public int ShowCount { get; private set; }

@@ -4,12 +4,31 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using Mochi.ServiceLocator;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.UI;
 
 namespace Mochi.Unity.GUI
 {
-    /// <summary>创建、挂载、登记并释放运行时面板实例。</summary>
+    /// <summary>创建、挂载、登记并释放运行时面板实例，并保证运行环境有一个可派发 UI 输入的 EventSystem。</summary>
     public sealed class GUIService : IDisposable
     {
+        private const string UiMapName = "UI";
+
+        //UI 模块按动作名逐条接线，缺任何一条都表现为对应输入永久失效且不报错，
+        //因此全部动作在改动模块之前一次核完，缺项集中抛出
+        private static readonly string[] UiActionNames =
+        {
+            "Point",
+            "Move",
+            "Submit",
+            "Cancel",
+            "LeftClick",
+            "MiddleClick",
+            "RightClick",
+            "ScrollWheel"
+        };
+
         private sealed class Entry
         {
             public Entry(Type panelType)
@@ -29,12 +48,107 @@ namespace Mochi.Unity.GUI
         private readonly Dictionary<string, Entry> entries = new Dictionary<string, Entry>(StringComparer.Ordinal);
         private bool disposed;
 
-        /// <summary>使用指定 UI 根、资源加载器和服务容器创建 GUI 服务。</summary>
-        public GUIService(UIRoot uiRoot, IPanelLoader panelLoader, ServiceProvider services = null)
+        /// <summary>使用指定 UI 根、资源加载器和服务容器创建 GUI 服务，并保证 EventSystem 可用。</summary>
+        /// <param name="uiActions">
+        /// 项目的 UI 输入资产；提供后 UI 输入模块改用该资产的 UI Map，传 null 表示项目未提供，模块保持自带默认资产。
+        /// 资产的生命周期归调用方，本服务只在构造时读取。
+        /// </param>
+        public GUIService(
+            UIRoot uiRoot,
+            IPanelLoader panelLoader,
+            ServiceProvider services = null,
+            InputActionAsset uiActions = null)
         {
             this.uiRoot = uiRoot ?? throw new ArgumentNullException(nameof(uiRoot));
             this.panelLoader = panelLoader ?? throw new ArgumentNullException(nameof(panelLoader));
             this.services = services ?? Services.Root ?? new ServiceProvider();
+            EnsureEventSystem(uiActions);
+        }
+
+        //EventSystem 的存在保证收在服务里：显式放置 UI 根的场景与应用装配路径共用同一条兜底，
+        //业务侧因此不需要在场景里放 EventSystem，也不会因为漏放而在运行期完全失去导航
+        private void EnsureEventSystem(InputActionAsset uiActions)
+        {
+            EventSystem eventSystem = EventSystem.current;
+            if (eventSystem == null)
+            {
+                //未激活的 EventSystem 不占 current，但再建一个就会让场景里长期并存两个派发器
+                eventSystem = UnityEngine.Object.FindAnyObjectByType<EventSystem>(FindObjectsInactive.Include);
+            }
+
+            if (eventSystem == null)
+            {
+                GameObject eventSystemObject = new GameObject("EventSystem");
+                //挂在 UI 根下与其同寿命：既不随创建时刻的 Active Scene 卸载而失效，
+                //也不会在 UI 根销毁后残留为孤儿全局对象
+                eventSystemObject.transform.SetParent(uiRoot.transform, false);
+                eventSystem = eventSystemObject.AddComponent<EventSystem>();
+            }
+
+            InputSystemUIInputModule module = eventSystem.GetComponent<InputSystemUIInputModule>();
+            if (module == null)
+            {
+                if (eventSystem.TryGetComponent(out BaseInputModule existingModule))
+                {
+                    //别的输入模块不是 Input System 的动作派发器，项目 UI Map 无处落地；
+                    //换模块会改变既有场景的输入后端，超出本服务的职责，只能报错交给装配方处理
+                    throw new InvalidOperationException(
+                        $"EventSystem '{eventSystem.name}' uses {existingModule.GetType().Name}, which cannot take project UI actions.");
+                }
+
+                module = eventSystem.gameObject.AddComponent<InputSystemUIInputModule>();
+            }
+
+            if (uiActions != null)
+            {
+                ConfigureUiActions(module, uiActions);
+            }
+        }
+
+        private static void ConfigureUiActions(InputSystemUIInputModule module, InputActionAsset uiActions)
+        {
+            InputActionMap uiMap = uiActions.FindActionMap(UiMapName);
+            if (uiMap == null)
+            {
+                throw new InvalidOperationException(
+                    $"Input asset '{uiActions.name}' has no '{UiMapName}' action map.");
+            }
+
+            InputAction[] actions = new InputAction[UiActionNames.Length];
+            List<string> missing = new List<string>();
+            for (int i = 0; i < UiActionNames.Length; i++)
+            {
+                actions[i] = uiMap.FindAction(UiActionNames[i]);
+                if (actions[i] == null)
+                {
+                    missing.Add(UiActionNames[i]);
+                }
+            }
+
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Input asset '{uiActions.name}' UI map is missing actions: {string.Join(", ", missing)}.");
+            }
+
+            bool wasEnabled = module.enabled;
+            //先停模块再改绑定：模块 OnEnable 在无动作时会自己塞进 new DefaultInputActions()，
+            //OnDisable 会释放它，UnassignActions 再清掉残留引用，这样下面设 actionsAsset 时
+            //setter 不会按“Map 名 + 动作名”把旧默认资产的同名动作错接到新资产上
+            //（Point/Submit 等同名动作会被接上，Move/LeftClick 这类改名的动作会被清空）
+            module.enabled = false;
+            module.UnassignActions();
+            module.actionsAsset = uiActions;
+            module.point = InputActionReference.Create(actions[0]);
+            module.move = InputActionReference.Create(actions[1]);
+            module.submit = InputActionReference.Create(actions[2]);
+            module.cancel = InputActionReference.Create(actions[3]);
+            module.leftClick = InputActionReference.Create(actions[4]);
+            module.middleClick = InputActionReference.Create(actions[5]);
+            module.rightClick = InputActionReference.Create(actions[6]);
+            module.scrollWheel = InputActionReference.Create(actions[7]);
+            //重新启用交给模块自己的 OnEnable 一次 Hook 并 Enable 全部动作，避免在这里逐条补 enable 漏项
+            module.enabled = wasEnabled;
         }
 
         /// <summary>按资源地址创建并登记面板。相同实例 ID 的并发请求共享一次创建。</summary>
@@ -48,11 +162,12 @@ namespace Mochi.Unity.GUI
                 token => PanelFactory.CreateAsync<TPanel>(panelLoader, address, null, services, token));
         }
 
+        /// <summary>按资源地址创建并登记带数据的面板。相同实例 ID 的并发请求共享一次创建。</summary>
         public UniTask<TPanel> CreatePanelAsync<TPanel, TData>(
             TData data,
             string address,
             string instanceId = null)
-            where TPanel : Panel<TData>
+            where TPanel : Panel, IDataPanel<TData>
         {
             return CreatePanelAsyncCore<TPanel>(
                 address,

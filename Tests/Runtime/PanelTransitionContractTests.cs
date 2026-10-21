@@ -381,7 +381,7 @@ namespace Mochi.Unity.GUI.Tests
             }
         }
 
-        private class CountingPanel : Panel
+        private class CountingPanel : InteractivePanel
         {
             public int ShowCount { get; private set; }
             public int HideCount { get; private set; }

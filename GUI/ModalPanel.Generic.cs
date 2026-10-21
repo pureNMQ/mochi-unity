@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -85,22 +84,17 @@ namespace Mochi.Unity.GUI
         }
     }
 
-    public abstract class ModalPanel<TData, TResult> : ModalPanel<TResult>
+    public abstract class ModalPanel<TData, TResult> : ModalPanel<TResult>, IDataPanel<TData>
     {
-        internal UniTask PrepareInternalAsync(TData data, CancellationToken cancellationToken)
+        /// <summary>应用一份呈现数据；弹窗已打开时再次调用即替换数据，不改变打开状态。</summary>
+        public void ApplyData(TData data)
         {
-            return OnPrepareAsync(data, cancellationToken);
+            OnApplyData(data);
         }
 
-        protected sealed override UniTask OnPrepareAsync(CancellationToken cancellationToken)
+        /// <summary>数据应用回调；工厂在激活实例前调用一次，外部重复应用时每次调用一次。</summary>
+        protected virtual void OnApplyData(TData data)
         {
-            return UniTask.FromException(new InvalidOperationException(
-                $"{GetType().Name} requires typed modal data."));
-        }
-
-        protected virtual UniTask OnPrepareAsync(TData data, CancellationToken cancellationToken)
-        {
-            return UniTask.CompletedTask;
         }
     }
 }

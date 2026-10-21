@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 using Cysharp.Threading.Tasks;
 using TMPro;
 using UnityEngine;
@@ -33,9 +32,7 @@ namespace Mochi.Unity.GUI
         [SerializeField] private Button acknowledgeButton;
         [SerializeField] private TMP_Text acknowledgeButtonText;
 
-        protected override UniTask OnPrepareAsync(
-            MessageModalData data,
-            CancellationToken cancellationToken)
+        protected override void OnApplyData(MessageModalData data)
         {
             if (data == null)
             {
@@ -50,7 +47,6 @@ namespace Mochi.Unity.GUI
 
             messageText.text = data.Message ?? string.Empty;
             acknowledgeButtonText.text = data.AcknowledgeButtonText ?? string.Empty;
-            return UniTask.CompletedTask;
         }
 
         protected override void OnOpen()

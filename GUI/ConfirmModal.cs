@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 using Cysharp.Threading.Tasks;
 using TMPro;
 using UnityEngine;
@@ -42,9 +41,7 @@ namespace Mochi.Unity.GUI
         [SerializeField] private Button cancelButton;
         [SerializeField] private TMP_Text cancelButtonText;
 
-        protected override UniTask OnPrepareAsync(
-            ConfirmModalData data,
-            CancellationToken cancellationToken)
+        protected override void OnApplyData(ConfirmModalData data)
         {
             if (data == null)
             {
@@ -60,7 +57,6 @@ namespace Mochi.Unity.GUI
             messageText.text = data.Message ?? string.Empty;
             confirmButtonText.text = data.ConfirmButtonText ?? string.Empty;
             cancelButtonText.text = data.CancelButtonText ?? string.Empty;
-            return UniTask.CompletedTask;
         }
 
         protected override void OnOpen()

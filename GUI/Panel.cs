@@ -3,17 +3,13 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using Mochi.ServiceLocator;
 using UnityEngine;
-using UnityEngine.EventSystems;
 
 namespace Mochi.Unity.GUI
 {
     public abstract class Panel : MonoBehaviour, IPanel
     {
-        [SerializeField] private GameObject defaultFocusTarget;
-
         public bool IsOpen { get; private set; }
         public bool IsVisible { get; private set; }
-        public GameObject DefaultFocusTarget => defaultFocusTarget;
 
         /// <summary>出生时由工厂注入的服务容器；未经工厂注入的面板为 null。</summary>
         public ServiceProvider Services { get; private set; }
@@ -25,6 +21,7 @@ namespace Mochi.Unity.GUI
         /// <summary>逻辑关闭完成（状态已提交）时通知外部订阅者；退场动画与自毁随后自行完成</summary>
         public event Action<Panel> Closed;
 
+        /// <summary>面板遮罩与透明度载体；组件缺失时自动补齐，过渡与交互控制都依赖它，因此永远不为 null。</summary>
         public CanvasGroup CanvasGroup
         {
             get
@@ -34,70 +31,21 @@ namespace Mochi.Unity.GUI
                     canvasGroup = GetComponent<CanvasGroup>();
                 }
 
+                if (canvasGroup == null)
+                {
+                    canvasGroup = gameObject.AddComponent<CanvasGroup>();
+                }
+
                 return canvasGroup;
             }
         }
 
         private CanvasGroup canvasGroup;
-        private GameObject savedFocusTarget;
         private bool closing;
         private bool coverLogicalHidden;
-        private bool focusCapturedForCover;
         private IPanelLoader prefabLoader;
         private GameObject prefabHandle;
         private CancellationTokenSource transitionCancellation;
-
-        /// <summary>
-        /// 设置面板是否可交互
-        /// </summary>
-        /// <param name="enabled"></param>
-        public void SetInteractable(bool enabled)
-        {
-            //被服务遮蔽时焦点由服务在遮蔽前采集，此处不得再覆盖
-            if (!enabled && IsVisible && !focusCapturedForCover)
-            {
-                SaveFocusInternal();
-            }
-            focusCapturedForCover = false;
-
-            CanvasGroup group = CanvasGroup;
-            if (group != null)
-            {
-                group.interactable = enabled;
-                group.blocksRaycasts = enabled;
-            }
-
-            if (enabled)
-            {
-                OnActivated();
-            }
-            else
-            {
-                OnDeactivated();
-            }
-        }
-
-        /// <summary>遮蔽前记录停滞的焦点，作为解除遮蔽后的恢复目标。</summary>
-        internal void CaptureFocusBeforeCover()
-        {
-            if (IsVisible)
-            {
-                SaveFocusInternal();
-                focusCapturedForCover = true;
-            }
-        }
-
-        /// <summary>
-        /// 设置焦点到指定的UI元素
-        /// </summary>
-        /// <param name="focusTarget"></param>
-        public void Focus(GameObject focusTarget)
-        {
-            if (focusTarget != null && EventSystem.current != null)
-            {
-                EventSystem.current.SetSelectedGameObject(focusTarget);
-            }
-        }
 
         internal UniTask PrepareInternalAsync(CancellationToken cancellationToken)
         {
@@ -147,8 +95,7 @@ namespace Mochi.Unity.GUI
         {
             gameObject.SetActive(true);
             IsVisible = true;
-            SetInteractable(true);
-            RestoreFocusInternal();
+            OnVisibilityChanged(true);
             OnShow();
             Shown?.Invoke(this);
         }
@@ -182,7 +129,7 @@ namespace Mochi.Unity.GUI
         /// <summary>遮蔽该面板：收回交互并中断在途过渡，但保留实例渲染。</summary>
         internal void CoverInternal()
         {
-            SetInteractable(false);
+            OnVisibilityChanged(false);
             CancelTransition();
             OnHide();
             IsVisible = false;
@@ -190,24 +137,25 @@ namespace Mochi.Unity.GUI
             Hidden?.Invoke(this);
         }
 
-        /// <summary>解除遮蔽：恢复被遮蔽前的显示态与交互，由基类的显示流程统一恢复焦点。</summary>
+        /// <summary>解除遮蔽：恢复被遮蔽前的显示态，交互与焦点由显示流程统一恢复。</summary>
         internal void UncoverInternal()
         {
             if (coverLogicalHidden)
             {
                 coverLogicalHidden = false;
+                //显示流程已内含交互位恢复与焦点交接，重复调用会把 OnShow 里设置的焦点覆盖掉
                 ShowImmediate();
+                return;
             }
 
-            SetInteractable(true);
+            OnVisibilityChanged(true);
         }
 
         private void HideCore()
         {
-            SaveFocusInternal();
             OnHide();
             IsVisible = false;
-            SetInteractable(false);
+            OnVisibilityChanged(false);
             Hidden?.Invoke(this);
         }
 
@@ -236,6 +184,7 @@ namespace Mochi.Unity.GUI
             {
                 IsOpen = false;
                 Closed?.Invoke(this);
+                OnClosedInternal();
                 FinishCloseAfterExitAsync().Forget();
             }
         }
@@ -262,6 +211,7 @@ namespace Mochi.Unity.GUI
             {
                 IsOpen = false;
                 Closed?.Invoke(this);
+                OnClosedInternal();
                 CancelTransition();
                 ReleasePrefabHandleImmediate();
                 Destroy(gameObject);
@@ -298,24 +248,6 @@ namespace Mochi.Unity.GUI
         {
             CancelTransition();
             ReleasePrefabHandleImmediate();
-        }
-
-        internal void FocusDefaultInternal()
-        {
-            Focus(defaultFocusTarget);
-        }
-
-        private void SaveFocusInternal()
-        {
-            savedFocusTarget = EventSystem.current == null
-                ? null
-                : EventSystem.current.currentSelectedGameObject;
-        }
-
-        //容器以「恢复已保存焦点」作为显式补偿调用，不新增焦点所有权状态
-        internal void RestoreFocusInternal()
-        {
-            Focus(savedFocusTarget ?? defaultFocusTarget);
         }
 
         private async UniTaskVoid FireTransitionAsync(bool enter)
@@ -422,21 +354,25 @@ namespace Mochi.Unity.GUI
         {
         }
 
-        /// <summary>面板经交互状态边沿转为可交互时触发；首次生效视为激活，不重复触发。</summary>
-        protected virtual void OnActivated()
-        {
-        }
-
-        /// <summary>面板被遮蔽而失去交互时触发。</summary>
-        protected virtual void OnDeactivated()
-        {
-        }
-
         protected virtual void OnHide()
         {
         }
 
         protected virtual void OnClose()
+        {
+        }
+
+        /// <summary>显示状态提交时回调，交互开关与焦点交接由此驱动。</summary>
+        /// <remarks>
+        /// 只能由框架内部覆写：业务子类覆写 OnShow/OnHide 时通常不会调用 base，
+        /// 把交接放在这两个可覆写回调里会被静默吞掉。
+        /// </remarks>
+        internal virtual void OnVisibilityChanged(bool visible)
+        {
+        }
+
+        /// <summary>Close 与 CloseImmediate 提交 Closed 之后回调一次。</summary>
+        internal virtual void OnClosedInternal()
         {
         }
     }

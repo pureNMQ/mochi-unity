@@ -1,7 +1,7 @@
 namespace Mochi.Unity.GUI
 {
     /// <summary>
-    /// 面板公共契约：状态查询、交互控制与生命周期入口（幂等）。
+    /// 面板公共契约：状态查询与生命周期入口（幂等）。
     /// </summary>
     public interface IPanel
     {
@@ -22,11 +22,5 @@ namespace Mochi.Unity.GUI
 
         /// <summary>关闭面板，不播退场过渡，立即释放并销毁实例</summary>
         void CloseImmediate();
-
-        /// <summary>
-        /// 设置面板是否可交互
-        /// </summary>
-        /// <param name="enabled"></param>
-        void SetInteractable(bool enabled);
     }
 }

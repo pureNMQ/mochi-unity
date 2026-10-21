@@ -1,16 +1,13 @@
 using System;
 using Cysharp.Threading.Tasks;
-using UnityEngine;
+
 namespace Mochi.Unity.GUI
 {
     public delegate void ModalResultCallback<TResult>(bool hasResult, TResult result);
 
-    public abstract class ModalPanel : Panel
+    public abstract class ModalPanel : InteractivePanel
     {
-        [SerializeField] private bool closeOnBackdropClick;
-
         private PanelStackService service;
-        public bool CloseOnBackdropClick => closeOnBackdropClick;
 
         internal PanelStackService Service => service;
 

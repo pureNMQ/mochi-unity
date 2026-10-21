@@ -1,14 +1,19 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 
+using Object = UnityEngine.Object;
+
 namespace Mochi.Unity.GUI.Tests
 {
-    /// <summary>PanelStackService 的两栈收拢、遮蔽隔离与 backdrop 托管验收用例。</summary>
+    /// <summary>PanelStackService 的两栈收拢、遮蔽隔离与复原验收用例。</summary>
     public sealed class PanelStackServiceTests
     {
         private readonly List<GameObject> objects = new List<GameObject>();
@@ -47,7 +52,7 @@ namespace Mochi.Unity.GUI.Tests
             Assert.IsNull(typeof(PanelStackService).GetProperty("Stack"));
             MethodInfo push = typeof(PanelStackService).GetMethod("Push");
             Assert.IsNotNull(push);
-            Assert.AreEqual(typeof(Panel), push.GetParameters()[0].ParameterType);
+            Assert.AreEqual(typeof(InteractivePanel), push.GetParameters()[0].ParameterType);
 
             //旧栈持有者类型退役，ModalService 仅保留语义门面
             Assert.IsNull(typeof(PanelStackService).Assembly.GetType("Mochi.Unity.GUI.NavigationService"));
@@ -188,7 +193,7 @@ namespace Mochi.Unity.GUI.Tests
             Track(new GameObject("EventSystem", typeof(EventSystem)));
             PanelStackService service = CreateService(out _, out _);
             TestPanel page = CreatePage("Page");
-            GameObject pageFocus = Track(new GameObject("PageFocus"));
+            GameObject pageFocus = CreateOwnedChild(page.transform, "PageFocus");
             SetDefaultFocusTarget(page, pageFocus);
             service.Push(page);
             Assert.AreSame(pageFocus, EventSystem.current.currentSelectedGameObject);
@@ -208,78 +213,144 @@ namespace Mochi.Unity.GUI.Tests
         }
 
         [UnityTest]
-        // 验收条件 AC4M: Modal 在场时 Page 层无法获得键盘或手柄焦点。
-        public IEnumerator ModalPresent_BlocksPageLayerInteraction()
+        // 验收条件 AC7：当有新页面推入，则旧页面先失去交互，新页面后显示。
+        public IEnumerator PushPage_CoversTopPageBeforeNewPageShows()
         {
-            Track(new GameObject("EventSystem", typeof(EventSystem)));
-            PanelStackService service = CreateService(out RectTransform pageLayer, out _);
-            CanvasGroup pageLayerGroup = pageLayer.GetComponent<CanvasGroup>();
-            TestPanel page = CreatePage("Page");
-            GameObject pageFocus = Track(new GameObject("PageFocus"));
-            SetDefaultFocusTarget(page, pageFocus);
-            service.Push(page);
+            PanelStackService service = CreateService(out _, out _);
+            List<string> journal = new List<string>();
+            TestPanel first = CreatePage("First");
+            first.Journal = journal;
+            service.Push(first);
+            journal.Clear();
 
-            Assert.IsTrue(pageLayerGroup.interactable);
-            Assert.IsTrue(pageLayerGroup.blocksRaycasts);
+            TestPanel second = CreatePage("Second");
+            second.Journal = journal;
+            service.Push(second);
 
-            TestModal modal = CreateModal("Modal");
-            GameObject modalFocus = Track(new GameObject("ModalFocus"));
-            SetDefaultFocusTarget(modal, modalFocus);
-            service.Push(modal);
-
-            //Page 层整体不可交互且不接收射线，键盘/手柄焦点无法落入该层；焦点已由栈顶 Modal 接管
-            Assert.IsFalse(pageLayerGroup.interactable);
-            Assert.IsFalse(pageLayerGroup.blocksRaycasts);
-            Assert.AreSame(modalFocus, EventSystem.current.currentSelectedGameObject);
-
-            modal.Close();
-
-            Assert.IsTrue(pageLayerGroup.interactable);
-            Assert.IsTrue(pageLayerGroup.blocksRaycasts);
-            Assert.AreSame(pageFocus, EventSystem.current.currentSelectedGameObject);
+            int covered = journal.IndexOf("First:deactivated");
+            int shown = journal.IndexOf("Second:shown");
+            Assert.That(covered, Is.GreaterThanOrEqualTo(0), string.Join(",", journal));
+            Assert.That(shown, Is.GreaterThan(covered), string.Join(",", journal));
             yield return null;
         }
 
         [UnityTest]
-        // 验收条件 AC7M：Modal 层不创建 Backdrop，嵌套 Modal 仍保持栈顶交互与下层可辨认。
-        public IEnumerator NestedModals_DoNotCreateBackdropsAndKeepStackPanels()
+        // 验收条件 AC8：当有弹窗推入，则下层页面与下层弹窗先失去交互，弹窗后显示。
+        public IEnumerator PushModal_CoversPagesAndLowerModalsBeforeShowing()
+        {
+            PanelStackService service = CreateService(out _, out _);
+            List<string> journal = new List<string>();
+            TestPanel page = CreatePage("Page");
+            page.Journal = journal;
+            service.Push(page);
+            journal.Clear();
+
+            TestModal modal = CreateModal("Modal");
+            modal.Journal = journal;
+            service.Push(modal);
+
+            int pageCovered = journal.IndexOf("Page:deactivated");
+            int modalShown = journal.IndexOf("Modal:shown");
+            Assert.That(pageCovered, Is.GreaterThanOrEqualTo(0), string.Join(",", journal));
+            Assert.That(modalShown, Is.GreaterThan(pageCovered), string.Join(",", journal));
+
+            journal.Clear();
+            TestModal topModal = CreateModal("TopModal");
+            topModal.Journal = journal;
+            service.Push(topModal);
+
+            int lowerCovered = journal.IndexOf("Modal:deactivated");
+            int topShown = journal.IndexOf("TopModal:shown");
+            Assert.That(lowerCovered, Is.GreaterThanOrEqualTo(0), string.Join(",", journal));
+            Assert.That(topShown, Is.GreaterThan(lowerCovered), string.Join(",", journal));
+            yield return null;
+        }
+
+        [UnityTest]
+        // 验收条件 AC9：当弹窗在场，则页面层与下层弹窗既不能被鼠标点击，也不能被手柄或键盘导航到达。
+        public IEnumerator ModalPresent_CoversPagesAndLowerModals()
+        {
+            PanelStackService service = CreateService(out _, out _);
+            TestPanel page = CreatePage("Page");
+            TestModal lowerModal = CreateModal("LowerModal");
+            TestModal topModal = CreateModal("TopModal");
+            service.Push(page);
+            service.Push(lowerModal);
+            service.Push(topModal);
+
+            //被遮面板逐个收回交互与射线，不依赖层整体开关
+            Assert.IsTrue(page.RaycastsBlocked);
+            Assert.IsFalse(page.Interactable);
+            Assert.IsTrue(lowerModal.RaycastsBlocked);
+            Assert.IsFalse(lowerModal.Interactable);
+
+            //只有栈顶 Modal 保持鼠标与导航可达
+            Assert.IsTrue(topModal.RaycastsAllowed);
+            Assert.IsTrue(topModal.Interactable);
+            yield return null;
+        }
+
+        [UnityTest]
+        // 验收条件 AC10：当页面被同栈新页面盖住，则被盖页面不可交互但保持渲染。
+        public IEnumerator CoveredPage_StaysRenderedButNotInteractive()
+        {
+            PanelStackService service = CreateService(out _, out _);
+            TestPanel covered = CreatePage("Covered");
+            TestPanel top = CreatePage("Top");
+            service.Push(covered);
+
+            service.Push(top);
+
+            Assert.IsTrue(covered.gameObject.activeSelf);
+            Assert.AreEqual(1f, covered.CanvasGroup.alpha);
+            Assert.IsFalse(covered.IsVisible);
+            Assert.IsFalse(covered.Interactable);
+            Assert.IsTrue(covered.RaycastsBlocked);
+            Assert.IsTrue(top.Interactable);
+            yield return null;
+        }
+
+        [Test]
+        // 验收条件 AC16：当需要打开 HUD 面板，则经 GUI 服务的层接口创建；面板栈服务的公开面不含 HUD 相关成员。
+        public void PublicSurface_ExposesNoHudMembers()
+        {
+            AssertNoPublicMemberContains(typeof(PanelStackService), "hud");
+
+            //HUD 面板的唯一创建路径是 GUI 服务的层接口
+            Assert.IsNotNull(typeof(GUIService).GetMethod("CreateAndShowPanelAsync"));
+            Assert.IsNotNull(typeof(GUIService).GetMethod("GetLayer"));
+            Assert.IsTrue(Enum.IsDefined(typeof(GUILayer), GUILayer.HUD));
+        }
+
+        [Test]
+        // 验收条件 AC17：面板栈服务不创建 backdrop 对象，公开面不含 backdrop 计数与点击关闭相关成员。
+        public void PublicSurface_CreatesNoBackdropObject()
         {
             PanelStackService service = CreateService(out _, out RectTransform modalLayer);
+            AssertNoPublicMemberContains(typeof(PanelStackService), "backdrop");
+            AssertNoPublicMemberContains(typeof(ModalPanel), "backdrop");
+
             TestModal first = CreateModal("First");
             TestModal second = CreateModal("Second");
-
             service.Push(first);
             service.Push(second);
 
-            Assert.AreEqual(0, service.BackdropCount);
-            Assert.AreEqual(2, service.ModalCount);
-            Assert.IsTrue(first.gameObject.activeSelf);
-            Assert.IsTrue(second.gameObject.activeSelf);
-            Assert.IsFalse(first.Interactable);
-            Assert.IsTrue(second.Interactable);
+            //Modal 层只承载入栈面板本身，不插入任何遮蔽对象
             Assert.AreEqual(2, modalLayer.childCount);
-            yield return null;
+            Assert.AreEqual(2, service.ModalCount);
         }
 
         private PanelStackService CreateService(out RectTransform pageLayer, out RectTransform modalLayer)
         {
             ClearLeftoverRoots();
 
-            GameObject uiRoot = Track(new GameObject("UIRoot"));
-            pageLayer = CreateLayer(uiRoot.transform, "PageLayer");
-            modalLayer = CreateLayer(uiRoot.transform, "ModalLayer");
-
+            UIRoot root = Track(new GameObject("UIRoot")).AddComponent<UIRoot>();
             GameObject serviceObject = Track(new GameObject("PanelStackService"));
             PanelStackService service = serviceObject.AddComponent<PanelStackService>();
-            service.BindLayers(pageLayer, modalLayer);
+            service.BindLayers(new GUIService(root, new NullLoader()));
+            pageLayer = root.Page;
+            modalLayer = root.Modal;
             return service;
-        }
-
-        private static RectTransform CreateLayer(Transform parent, string name)
-        {
-            GameObject layer = new GameObject(name, typeof(RectTransform), typeof(CanvasGroup));
-            layer.transform.SetParent(parent, false);
-            return layer.GetComponent<RectTransform>();
         }
 
         private TestPanel CreatePage(string name)
@@ -294,57 +365,32 @@ namespace Mochi.Unity.GUI.Tests
             return gameObject.AddComponent<TestModal>();
         }
 
-        private static Transform FindBackdrop(RectTransform modalLayer, int index)
+        private static GameObject CreateOwnedChild(Transform parent, string name)
         {
-            int seen = 0;
-            for (int childIndex = 0; childIndex < modalLayer.childCount; childIndex++)
-            {
-                Transform child = modalLayer.GetChild(childIndex);
-                if (child.name != "ModalBackdrop")
-                {
-                    continue;
-                }
-
-                if (seen == index)
-                {
-                    return child;
-                }
-
-                seen++;
-            }
-
-            return null;
+            GameObject child = new GameObject(name);
+            child.transform.SetParent(parent, false);
+            return child;
         }
 
-        private static void AssertBackdropIsPresent(Transform backdrop)
+        private static void SetDefaultFocusTarget(InteractivePanel panel, GameObject focusTarget)
         {
-            RectTransform rect = backdrop.GetComponent<RectTransform>();
-            Assert.IsNotNull(rect);
-            Assert.AreEqual(Vector2.zero, rect.anchorMin);
-            Assert.AreEqual(Vector2.one, rect.anchorMax);
-            Assert.IsNotNull(backdrop.GetComponent<CanvasGroup>());
-            Assert.IsNotNull(backdrop.GetComponent<UnityEngine.UI.Image>());
-        }
-
-        //backdrop 为纯遮蔽：不得存在任何 IPointerClickHandler 实现，否则点击会带出关闭语义
-        private static void AssertBackdropHasNoClickHandler(Transform backdrop)
-        {
-            MonoBehaviour[] behaviours = backdrop.GetComponents<MonoBehaviour>();
-            foreach (MonoBehaviour behaviour in behaviours)
-            {
-                Assert.IsFalse(
-                    behaviour is IPointerClickHandler,
-                    "backdrop 不应实现 IPointerClickHandler");
-            }
-        }
-
-        private static void SetDefaultFocusTarget(Panel panel, GameObject focusTarget)
-        {
-            FieldInfo field = typeof(Panel).GetField(
+            FieldInfo field = typeof(InteractivePanel).GetField(
                 "defaultFocusTarget",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.IsNotNull(field);
             field.SetValue(panel, focusTarget);
+        }
+
+        private static void AssertNoPublicMemberContains(Type type, string token)
+        {
+            const BindingFlags Flags = BindingFlags.Public | BindingFlags.DeclaredOnly |
+                                       BindingFlags.Instance | BindingFlags.Static;
+            foreach (MemberInfo member in type.GetMembers(Flags))
+            {
+                Assert.IsFalse(
+                    member.Name.ToLowerInvariant().Contains(token),
+                    type.Name + "." + member.Name + " 属于已从公开面删除的语义");
+            }
         }
 
         private static void ClearLeftoverRoots()
@@ -361,41 +407,71 @@ namespace Mochi.Unity.GUI.Tests
             return target;
         }
 
-        private sealed class TestPanel : Panel
+        private sealed class NullLoader : IPanelLoader
         {
+            public UniTask<GameObject> LoadAsync(string key, CancellationToken cancellationToken)
+            {
+                return UniTask.FromResult<GameObject>(null);
+            }
+
+            public void Release(GameObject loadedPrefab)
+            {
+            }
+        }
+
+        private sealed class TestPanel : InteractivePanel
+        {
+            public List<string> Journal { get; set; }
             public int ActivatedCount { get; set; }
             public int DeactivatedCount { get; set; }
 
-            public bool Interactable => CanvasGroup != null && CanvasGroup.interactable;
-            public bool RaycastsAllowed => CanvasGroup != null && CanvasGroup.blocksRaycasts;
+            public bool Interactable => CanvasGroup.interactable;
+            public bool RaycastsAllowed => CanvasGroup.blocksRaycasts;
             public bool RaycastsBlocked => !RaycastsAllowed;
 
             protected override void OnActivated()
             {
                 ActivatedCount++;
+                Journal?.Add(name + ":activated");
             }
 
             protected override void OnDeactivated()
             {
                 DeactivatedCount++;
+                Journal?.Add(name + ":deactivated");
+            }
+
+            protected override void OnShow()
+            {
+                Journal?.Add(name + ":shown");
             }
         }
 
         private sealed class TestModal : ModalPanel
         {
+            public List<string> Journal { get; set; }
             public int ActivatedCount { get; set; }
             public int DeactivatedCount { get; set; }
 
-            public bool Interactable => CanvasGroup != null && CanvasGroup.interactable;
+            public bool Interactable => CanvasGroup.interactable;
+            public bool RaycastsAllowed => CanvasGroup.blocksRaycasts;
+            public bool RaycastsBlocked => !RaycastsAllowed;
 
             protected override void OnActivated()
             {
                 ActivatedCount++;
+                Journal?.Add(name + ":activated");
             }
 
             protected override void OnDeactivated()
             {
                 DeactivatedCount++;
+                Journal?.Add(name + ":deactivated");
+            }
+
+            protected override void OnShow()
+            {
+                Journal?.Add(name + ":shown");
             }
         }
     }

@@ -67,6 +67,141 @@ namespace Mochi.Unity.GUI.Tests
         }
 
         [UnityTest]
+        // 架构：数据交付时机 带数据创建时数据在 OnOpen 之前已应用，OnOpen 可直接读取本次数据。
+        public IEnumerator CreateWithData_TypedPanel_AppliesDataBeforeOpen()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GameObject prefab = Track(CreatePrefab<TypedPanelPage>("FactoryPrefab", active: true));
+                CountingLoader loader = new CountingLoader(prefab);
+                Transform parent = Track(new GameObject("Parent")).transform;
+                DataPayload data = new DataPayload(11);
+
+                TypedPanelPage panel = await PanelFactory.CreateAsync<TypedPanelPage, DataPayload>(
+                    loader, "key", parent, data, CancellationToken.None);
+
+                Assert.That(panel.Applied, Is.SameAs(data));
+                Assert.That(panel.Order, Is.EqualTo(new[] { "apply", "open" }));
+                Assert.That(panel.IsOpen, Is.True);
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 可交互面板带数据创建时数据在 OnOpen 之前已应用。
+        public IEnumerator CreateWithData_TypedInteractivePanel_AppliesDataBeforeOpen()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GameObject prefab = Track(CreatePrefab<TypedInteractivePage>("FactoryPrefab", active: true));
+                CountingLoader loader = new CountingLoader(prefab);
+                Transform parent = Track(new GameObject("Parent")).transform;
+                DataPayload data = new DataPayload(12);
+
+                TypedInteractivePage panel = await PanelFactory.CreateAsync<TypedInteractivePage, DataPayload>(
+                    loader, "key", parent, data, CancellationToken.None);
+
+                Assert.That(panel.Applied, Is.SameAs(data));
+                Assert.That(panel.Order, Is.EqualTo(new[] { "apply", "open" }));
+                Assert.That(panel.IsOpen, Is.True);
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 弹窗带数据创建时数据在 OnOpen 之前已应用。
+        public IEnumerator CreateWithData_TypedModal_AppliesDataBeforeOpen()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GameObject prefab = Track(CreatePrefab<TypedModalPage>("FactoryPrefab", active: true));
+                CountingLoader loader = new CountingLoader(prefab);
+                Transform parent = Track(new GameObject("Parent")).transform;
+                DataPayload data = new DataPayload(13);
+
+                TypedModalPage panel = await PanelFactory.CreateAsync<TypedModalPage, DataPayload, bool>(
+                    loader, "key", parent, data, CancellationToken.None);
+
+                Assert.That(panel.Applied, Is.SameAs(data));
+                Assert.That(panel.Order, Is.EqualTo(new[] { "apply", "open" }));
+                Assert.That(panel.IsOpen, Is.True);
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 泛型面板允许先无数据创建，打开后再补数据。
+        public IEnumerator CreateWithoutData_TypedPanel_AllowsApplyingDataAfterOpen()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GameObject prefab = Track(CreatePrefab<TypedPanelPage>("FactoryPrefab", active: true));
+                CountingLoader loader = new CountingLoader(prefab);
+                Transform parent = Track(new GameObject("Parent")).transform;
+                DataPayload data = new DataPayload(5);
+
+                TypedPanelPage panel = await PanelFactory.CreateAsync<TypedPanelPage>(
+                    loader, "key", parent, CancellationToken.None);
+
+                Assert.That(panel.IsOpen, Is.True);
+                Assert.That(panel.Applied, Is.Null);
+                Assert.That(panel.Order, Is.EqualTo(new[] { "open" }));
+
+                panel.ApplyData(data);
+
+                Assert.That(panel.Applied, Is.SameAs(data));
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 可交互泛型面板允许先无数据创建，打开后再补数据。
+        public IEnumerator CreateWithoutData_TypedInteractivePanel_AllowsApplyingDataAfterOpen()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GameObject prefab = Track(CreatePrefab<TypedInteractivePage>("FactoryPrefab", active: true));
+                CountingLoader loader = new CountingLoader(prefab);
+                Transform parent = Track(new GameObject("Parent")).transform;
+                DataPayload data = new DataPayload(6);
+
+                TypedInteractivePage panel = await PanelFactory.CreateAsync<TypedInteractivePage>(
+                    loader, "key", parent, CancellationToken.None);
+
+                Assert.That(panel.IsOpen, Is.True);
+                Assert.That(panel.Applied, Is.Null);
+                Assert.That(panel.Order, Is.EqualTo(new[] { "open" }));
+
+                panel.ApplyData(data);
+
+                Assert.That(panel.Applied, Is.SameAs(data));
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 弹窗打开后再次应用数据只替换数据，不重入 Open/Close 生命周期。
+        public IEnumerator ApplyData_AfterOpen_OnTypedModal_ReplacesDataWithoutLifecycleReentry()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                GameObject prefab = Track(CreatePrefab<TypedModalPage>("FactoryPrefab", active: true));
+                CountingLoader loader = new CountingLoader(prefab);
+                Transform parent = Track(new GameObject("Parent")).transform;
+                DataPayload initial = new DataPayload(1);
+                DataPayload replacement = new DataPayload(2);
+
+                TypedModalPage panel = await PanelFactory.CreateAsync<TypedModalPage, DataPayload, bool>(
+                    loader, "key", parent, initial, CancellationToken.None);
+                Assert.That(panel.ApplyCount, Is.EqualTo(1));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+
+                panel.ApplyData(replacement);
+
+                Assert.That(panel.Applied, Is.SameAs(replacement));
+                Assert.That(panel.ApplyCount, Is.EqualTo(2));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+                Assert.That(panel.CloseCount, Is.EqualTo(0));
+                Assert.That(panel.IsOpen, Is.True);
+            });
+        }
+
+        [UnityTest]
         public IEnumerator Create_LoaderReturnsNull_ReturnsNullWithoutSideEffects()
         {
             return UniTask.ToCoroutine(async () =>
@@ -230,6 +365,77 @@ namespace Mochi.Unity.GUI.Tests
             {
                 SharedSource.Cancel();
                 return UniTask.CompletedTask;
+            }
+        }
+
+        private sealed class DataPayload
+        {
+            public DataPayload(int value)
+            {
+                Value = value;
+            }
+
+            public int Value { get; }
+        }
+
+        private sealed class TypedPanelPage : Panel<DataPayload>
+        {
+            public List<string> Order { get; } = new List<string>();
+            public DataPayload Applied { get; private set; }
+
+            protected override void OnApplyData(DataPayload data)
+            {
+                Applied = data;
+                Order.Add("apply");
+            }
+
+            protected override void OnOpen()
+            {
+                Order.Add("open");
+            }
+        }
+
+        private sealed class TypedInteractivePage : InteractivePanel<DataPayload>
+        {
+            public List<string> Order { get; } = new List<string>();
+            public DataPayload Applied { get; private set; }
+
+            protected override void OnApplyData(DataPayload data)
+            {
+                Applied = data;
+                Order.Add("apply");
+            }
+
+            protected override void OnOpen()
+            {
+                Order.Add("open");
+            }
+        }
+
+        private sealed class TypedModalPage : ModalPanel<DataPayload, bool>
+        {
+            public List<string> Order { get; } = new List<string>();
+            public DataPayload Applied { get; private set; }
+            public int ApplyCount { get; private set; }
+            public int OpenCount { get; private set; }
+            public int CloseCount { get; private set; }
+
+            protected override void OnApplyData(DataPayload data)
+            {
+                Applied = data;
+                ApplyCount++;
+                Order.Add("apply");
+            }
+
+            protected override void OnOpen()
+            {
+                OpenCount++;
+                Order.Add("open");
+            }
+
+            protected override void OnClose()
+            {
+                CloseCount++;
             }
         }
 

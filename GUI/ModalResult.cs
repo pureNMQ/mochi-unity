@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace Mochi.Unity.GUI
 {
@@ -34,35 +33,6 @@ namespace Mochi.Unity.GUI
         public static ModalResult<TResult> Cancelled()
         {
             return new ModalResult<TResult>(false, default);
-        }
-    }
-
-    /// <summary>面板资源地址映射：类型到 Addressables 地址；未登记的类型回落为类型名。</summary>
-    public sealed class PanelAddressMap
-    {
-        private readonly Dictionary<Type, string> addresses = new Dictionary<Type, string>();
-
-        /// <summary>登记面板类型的资源地址，返回自身以便连续登记。</summary>
-        public PanelAddressMap Map<TPanel>(string address) where TPanel : Panel
-        {
-            if (string.IsNullOrEmpty(address))
-            {
-                throw new ArgumentException("Panel address must not be empty.", nameof(address));
-            }
-
-            addresses[typeof(TPanel)] = address;
-            return this;
-        }
-
-        /// <summary>按类型取资源地址。</summary>
-        public bool TryGetAddress(Type panelType, out string address)
-        {
-            if (panelType == null)
-            {
-                throw new ArgumentNullException(nameof(panelType));
-            }
-
-            return addresses.TryGetValue(panelType, out address);
         }
     }
 }

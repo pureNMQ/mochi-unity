@@ -1,92 +1,58 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using Cysharp.Threading.Tasks;
-using Mochi.ServiceLocator;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace Mochi.Unity.GUI
 {
-    /// <summary>面板导航服务：Page/Modal 两栈的唯一持有与协调者，并托管模态 backdrop 与面板创建。</summary>
+    /// <summary>面板导航服务：Page 与 Modal 两栈的唯一持有与协调者。</summary>
     /// <remarks>
-    /// 两栈数据不对外暴露，避免调用方绕过本服务直接改栈。backdrop 为纯遮蔽：只压暗与阻挡被遮层输入，
-    /// 无点击语义，Modal 关闭仅由面板自身出口与 <see cref="Back"/> 发起。
-    /// 面板资源地址由调用方提供或经 <see cref="PanelAddressMap"/> 解析；调用方不接触面板实例与层级。
+    /// 两栈数据不对外暴露，避免调用方绕过本服务直接改栈。面板实例一律经 <see cref="GUIService"/> 按资源地址创建，
+    /// 调用方不接触实例与层级；越过该服务创建的实例可经 <see cref="Push"/> 直接入栈，此时不登记也不回收。
+    /// 推入顺序固定为先遮蔽旧面板再显示新面板，因此每条进出栈路径都自行维持两条不变量：
+    /// Modal 栈非空时页面与下层 Modal 全部处于遮蔽态，仅栈顶 Modal 可交互；
+    /// Modal 栈为空时仅栈顶页不遮蔽。
     /// </remarks>
     public sealed class PanelStackService : MonoBehaviour
     {
-        private readonly List<Panel> pageStack = new List<Panel>();
+        private readonly List<InteractivePanel> pageStack = new List<InteractivePanel>();
         private readonly List<ModalPanel> modalStack = new List<ModalPanel>();
         private readonly Dictionary<Panel, UniTaskCompletionSource<ModalResult<object>>> pendingResults =
             new Dictionary<Panel, UniTaskCompletionSource<ModalResult<object>>>();
-        private readonly Dictionary<string, Panel> hudPanels = new Dictionary<string, Panel>(StringComparer.Ordinal);
 
         private RectTransform pageLayer;
         private RectTransform modalLayer;
-        private CanvasGroup pageLayerCanvasGroup;
         private bool layersBound;
-        private IPanelLoader panelLoader;
-        private ServiceProvider services;
         private GUIService guiService;
-        private PanelAddressMap addressMap;
-        private CancellationTokenSource lifetimeCancellation;
+        private InputAction cancelAction;
 
         /// <summary>最后一个 Page 出栈后触发。</summary>
         public event Action StackEmptied;
+
+        /// <summary>
+        /// 取消输入无人接住时触发：栈空，或前台面板把 <see cref="InteractivePanel.AllowCancelBack"/> 关掉。
+        /// 应用层据此让按键有反馈，而不是把它吞在框架里。
+        /// </summary>
+        public event Action CancelRejected;
 
         /// <summary>Page 栈条目数。</summary>
         public int PageCount => pageStack.Count;
         /// <summary>Modal 栈条目数。</summary>
         public int ModalCount => modalStack.Count;
-        /// <summary>兼容旧查询；最终架构不创建 backdrop。</summary>
-        public int BackdropCount => 0;
         /// <summary>Page 栈顶，栈空时为 null。</summary>
-        public Panel CurrentPage => pageStack.Count == 0 ? null : pageStack[pageStack.Count - 1];
+        public InteractivePanel CurrentPage => pageStack.Count == 0 ? null : pageStack[pageStack.Count - 1];
         /// <summary>Modal 栈顶，栈空时为 null。</summary>
         public ModalPanel CurrentModal => modalStack.Count == 0 ? null : modalStack[modalStack.Count - 1];
 
-        /// <summary>
-        /// 绑定 Page 层与 Modal 层；Modal 层的 backdrop 与面板呈现均由本服务负责。
-        /// </summary>
-        public void BindLayers(RectTransform pageLayerTransform, RectTransform modalLayerTransform)
-        {
-            BindLayers(pageLayerTransform, modalLayerTransform, null, null, null);
-        }
-
-        public void BindLayers(GUIService service, PanelAddressMap panelAddressMap = null)
+        /// <summary>绑定 GUI 服务；Page 层与 Modal 层由该服务解析。</summary>
+        /// <exception cref="ArgumentNullException"><paramref name="service"/> 为 null。</exception>
+        /// <exception cref="InvalidOperationException">该实例已绑定过层。</exception>
+        public void BindLayers(GUIService service)
         {
             if (service == null)
             {
                 throw new ArgumentNullException(nameof(service));
-            }
-
-            guiService = service;
-            BindLayers(
-                service.GetLayer(GUILayer.Page),
-                service.GetLayer(GUILayer.Modal),
-                null,
-                null,
-                panelAddressMap);
-        }
-
-        /// <summary>
-        /// 绑定 Page 层、Modal 层与面板创建所需依赖；面板资源地址经 <paramref name="panelAddressMap"/> 解析。
-        /// </summary>
-        public void BindLayers(
-            RectTransform pageLayerTransform,
-            RectTransform modalLayerTransform,
-            IPanelLoader loader,
-            ServiceProvider panelServices = null,
-            PanelAddressMap panelAddressMap = null)
-        {
-            if (pageLayerTransform == null)
-            {
-                throw new ArgumentNullException(nameof(pageLayerTransform));
-            }
-
-            if (modalLayerTransform == null)
-            {
-                throw new ArgumentNullException(nameof(modalLayerTransform));
             }
 
             if (layersBound)
@@ -94,73 +60,73 @@ namespace Mochi.Unity.GUI
                 throw new InvalidOperationException("Layers are already bound; each panel stack service owns one pair of layers.");
             }
 
-            pageLayer = pageLayerTransform;
-            modalLayer = modalLayerTransform;
-            pageLayerCanvasGroup = ResolveLayerCanvasGroup(pageLayer);
-            panelLoader = loader;
-            services = panelServices ?? Services.Root ?? new ServiceProvider();
-            addressMap = panelAddressMap ?? new PanelAddressMap();
-            lifetimeCancellation = new CancellationTokenSource();
+            guiService = service;
+            pageLayer = service.GetLayer(GUILayer.Page);
+            modalLayer = service.GetLayer(GUILayer.Modal);
             layersBound = true;
         }
 
-        /// <summary>
-        /// 异步创建并推入页面；<paramref name="address"/> 省略时按类型经地址映射解析。
-        /// </summary>
-        public async UniTask<TPanel> PushPageAsync<TPanel>(string address = null) where TPanel : Panel
+        /// <summary>绑定取消输入；收到取消后由本服务按前台面板路由，面板自身不再订阅取消键。</summary>
+        /// <param name="cancelAction">项目 UI 映射的取消动作，生命周期归调用方；重复绑定同一动作无副作用。</param>
+        /// <exception cref="ArgumentNullException"><paramref name="cancelAction"/> 为 null。</exception>
+        public void BindCancelInput(InputAction cancelAction)
         {
-            RequireLayers();
-            TPanel page = guiService != null
-                ? await guiService.CreatePanelAsync<TPanel>(ResolveAddress<TPanel>(address))
-                : await PanelFactory.CreateAsync<TPanel>(
-                    panelLoader, ResolveAddress<TPanel>(address), pageLayer, services, LifetimeToken);
-            if (page == null)
+            if (cancelAction == null)
             {
-                return null;
+                throw new ArgumentNullException(nameof(cancelAction));
             }
 
-            Push(page);
-            return page;
-        }
-
-        /// <summary>
-        /// 异步创建并推入带数据页面；<paramref name="address"/> 省略时按类型经地址映射解析。
-        /// </summary>
-        public async UniTask<TPanel> PushPageAsync<TPanel, TData>(TData data, string address = null)
-            where TPanel : Panel<TData>
-        {
-            RequireLayers();
-            TPanel page = guiService != null
-                ? await guiService.CreatePanelAsync<TPanel, TData>(data, ResolveAddress<TPanel>(address))
-                : await PanelFactory.CreateAsync<TPanel, TData>(
-                    panelLoader, ResolveAddress<TPanel>(address), pageLayer, data, services, LifetimeToken);
-            if (page == null)
+            if (ReferenceEquals(this.cancelAction, cancelAction))
             {
-                return null;
+                return;
             }
 
-            Push(page);
-            return page;
+            UnbindCancelInput();
+            this.cancelAction = cancelAction;
+            cancelAction.performed += OnCancelPerformed;
         }
 
-        /// <summary>
-        /// 异步创建并推入弹窗；结果经 <see cref="GetModalResult{TPanel,TResult}"/> 等待。
-        /// </summary>
-        public async UniTask<TPanel> PushModalAsync<TPanel, TData, TResult>(TData data, string address = null)
+        /// <summary>退订取消输入，此后取消键不再由本服务路由；未绑定时无副作用。</summary>
+        public void UnbindCancelInput()
+        {
+            if (cancelAction == null)
+            {
+                return;
+            }
+
+            cancelAction.performed -= OnCancelPerformed;
+            cancelAction = null;
+        }
+
+        /// <summary>异步创建并推入页面。</summary>
+        /// <param name="address">面板的 Addressables 资源地址，必填。</param>
+        /// <exception cref="ArgumentException"><paramref name="address"/> 为空。</exception>
+        public UniTask<TPanel> PushPageAsync<TPanel>(string address = null) where TPanel : InteractivePanel
+        {
+            RequireLayers();
+            return PushPageCoreAsync<TPanel>(RequireAddress(address));
+        }
+
+        /// <summary>异步创建并推入带数据页面。</summary>
+        /// <param name="data">页面呈现的数据，打开前应用到面板。</param>
+        /// <param name="address">面板的 Addressables 资源地址，必填。</param>
+        /// <exception cref="ArgumentException"><paramref name="address"/> 为空。</exception>
+        public UniTask<TPanel> PushPageAsync<TPanel, TData>(TData data, string address = null)
+            where TPanel : InteractivePanel<TData>
+        {
+            RequireLayers();
+            return PushPageCoreAsync<TPanel, TData>(data, RequireAddress(address));
+        }
+
+        /// <summary>异步创建并推入弹窗；结果经 <see cref="GetModalResult{TPanel,TResult}"/> 等待。</summary>
+        /// <param name="data">弹窗呈现的数据，打开前应用到面板。</param>
+        /// <param name="address">面板的 Addressables 资源地址，必填。</param>
+        /// <exception cref="ArgumentException"><paramref name="address"/> 为空。</exception>
+        public UniTask<TPanel> PushModalAsync<TPanel, TData, TResult>(TData data, string address = null)
             where TPanel : ModalPanel<TData, TResult>
         {
             RequireLayers();
-            TPanel modal = guiService != null
-                ? await guiService.CreateModalAsync<TPanel, TData, TResult>(data, ResolveAddress<TPanel>(address))
-                : await PanelFactory.CreateAsync<TPanel, TData, TResult>(
-                    panelLoader, ResolveAddress<TPanel>(address), modalLayer, data, services, LifetimeToken);
-            if (modal == null)
-            {
-                return null;
-            }
-
-            Push(modal);
-            return modal;
+            return PushModalCoreAsync<TPanel, TData, TResult>(data, RequireAddress(address));
         }
 
         /// <summary>
@@ -199,126 +165,65 @@ namespace Mochi.Unity.GUI
             return ModalResult<TResult>.Create(true, typed);
         }
 
-        /// <summary>打开常驻 HUD 面板；同一地址重复打开返回既有实例。</summary>
-        public async UniTask<TPanel> OpenHudAsync<TPanel>(string address = null) where TPanel : Panel
+        private async UniTask<TPanel> PushPageCoreAsync<TPanel>(string address) where TPanel : InteractivePanel
         {
-            RequireLayers();
-            string resolved = ResolveAddress<TPanel>(address);
-            if (hudPanels.TryGetValue(resolved, out Panel existing))
-            {
-                return existing as TPanel;
-            }
-
-            TPanel panel = await PanelFactory.CreateAsync<TPanel>(
-                panelLoader, resolved, HudLayer, services, LifetimeToken);
-            if (panel == null)
+            TPanel page = await guiService.CreatePanelAsync<TPanel>(address);
+            if (page == null)
             {
                 return null;
             }
 
-            hudPanels[resolved] = panel;
-            panel.Closed += OnHudPanelClosed;
-            panel.Show();
-            return panel;
+            PushPage(page);
+            return page;
         }
 
-        /// <summary>关闭常驻 HUD 面板并从服务登记中移除。</summary>
-        public bool CloseHud(Panel panel)
+        private async UniTask<TPanel> PushPageCoreAsync<TPanel, TData>(TData data, string address)
+            where TPanel : InteractivePanel<TData>
         {
-            if (panel == null)
+            TPanel page = await guiService.CreatePanelAsync<TPanel, TData>(data, address);
+            if (page == null)
             {
-                return false;
+                return null;
             }
 
-            foreach (KeyValuePair<string, Panel> entry in hudPanels)
-            {
-                if (ReferenceEquals(entry.Value, panel))
-                {
-                    hudPanels.Remove(entry.Key);
-                    break;
-                }
-            }
-
-            panel.Closed -= OnHudPanelClosed;
-            panel.Close();
-            return true;
+            PushPage(page);
+            return page;
         }
 
-        private RectTransform HudLayer => modalLayer.parent.Find("HUDLayer") as RectTransform;
-
-        private void OnHudPanelClosed(Panel panel)
+        private async UniTask<TPanel> PushModalCoreAsync<TPanel, TData, TResult>(TData data, string address)
+            where TPanel : ModalPanel<TData, TResult>
         {
-            panel.Closed -= OnHudPanelClosed;
-            foreach (KeyValuePair<string, Panel> entry in hudPanels)
+            TPanel modal = await guiService.CreateModalAsync<TPanel, TData, TResult>(data, address);
+            if (modal == null)
             {
-                if (ReferenceEquals(entry.Value, panel))
-                {
-                    hudPanels.Remove(entry.Key);
-                    break;
-                }
+                return null;
             }
+
+            PushModal(modal);
+            return modal;
         }
 
-        private string ResolveAddress<TPanel>(string address) where TPanel : Panel
-        {
-            if (!string.IsNullOrEmpty(address))
-            {
-                return address;
-            }
-
-            if (addressMap.TryGetAddress(typeof(TPanel), out string mapped))
-            {
-                return mapped;
-            }
-
-            return typeof(TPanel).Name;
-        }
-
-        private CancellationToken LifetimeToken =>
-            lifetimeCancellation == null ? CancellationToken.None : lifetimeCancellation.Token;
-
-        private void OnDestroy()
-        {
-            lifetimeCancellation?.Cancel();
-            lifetimeCancellation?.Dispose();
-            lifetimeCancellation = null;
-
-            foreach (Panel panel in new List<Panel>(hudPanels.Values))
-            {
-                if (panel != null)
-                {
-                    panel.Closed -= OnHudPanelClosed;
-                    panel.CloseImmediate();
-                }
-            }
-
-            hudPanels.Clear();
-        }
-
-        /// <summary>
-        /// 推入面板：ModalPanel 进 Modal 栈，其余进 Page 栈。
-        /// </summary>
-        public void Push(Panel panel)
+        /// <summary>推入面板：<see cref="ModalPanel"/> 进 Modal 栈，其余进 Page 栈。</summary>
+        public void Push(InteractivePanel panel)
         {
             if (panel == null)
             {
                 throw new ArgumentNullException(nameof(panel));
             }
 
+            RequireLayers();
             if (panel is ModalPanel modal)
             {
-                RequireLayers();
                 PushModal(modal);
                 return;
             }
 
-            RequireLayers();
             CloseAllModals();
             PushPage(panel);
         }
 
         /// <summary>关闭面板，无论它位于哪个栈；不在任何栈中时返回 false。</summary>
-        public bool Close(Panel panel)
+        public bool Close(InteractivePanel panel)
         {
             if (panel == null || (!pageStack.Contains(panel) && !modalStack.Contains(panel as ModalPanel)))
             {
@@ -341,6 +246,37 @@ namespace Mochi.Unity.GUI
             }
 
             return PopTopPage();
+        }
+
+        //取消键在同一物理键上还绑着别处（战斗输入、世界呼出），未接住时不能静默吞掉，
+        //否则玩家分不清按键是没生效还是被框架吃掉了
+        private void OnCancelPerformed(InputAction.CallbackContext context)
+        {
+            HandleCancelInput();
+        }
+
+        private void HandleCancelInput()
+        {
+            if (modalStack.Count > 0)
+            {
+                ModalPanel modal = CurrentModal;
+                if (modal != null && modal.AllowCancelBack && Cancel(modal))
+                {
+                    return;
+                }
+
+                CancelRejected?.Invoke();
+                return;
+            }
+
+            InteractivePanel page = CurrentPage;
+            if (page != null && page.AllowCancelBack)
+            {
+                page.Close();
+                return;
+            }
+
+            CancelRejected?.Invoke();
         }
 
         /// <summary>以结果语义完成栈顶 Modal；调用方不需接触面板的结果通道。</summary>
@@ -406,7 +342,21 @@ namespace Mochi.Unity.GUI
                 modalStack.RemoveAt(index);
             }
 
-            RefreshCoverage();
+            //销毁绕过 Closed 事件：栈顶可能仍是遮蔽态，按剩余栈内容重建两条不变量
+            if (modalStack.Count > 0)
+            {
+                CoverLayersBelowTopModal();
+                CurrentModal.UncoverInternal();
+            }
+            else
+            {
+                for (int index = 0; index < pageStack.Count - 1; index++)
+                {
+                    pageStack[index]?.CoverInternal();
+                }
+
+                CurrentPage?.UncoverInternal();
+            }
         }
 
         private void PushModal(ModalPanel modal)
@@ -421,14 +371,12 @@ namespace Mochi.Unity.GUI
             modal.Closed += OnModalClosed;
             modal.BindService(this);
 
-            //取焦点必须先于遮蔽：被遮面板只有先记下自己停滞的焦点，解除遮蔽后才有正确的恢复目标
-            CaptureCoveredFocus();
+            //先遮旧后显新：旧面板在自己仍持有选中时完成交接，无需遮蔽后再补采焦点
+            CoverLayersBelowTopModal();
             modal.Show();
-            modal.FocusDefaultInternal();
-            RefreshCoverage();
         }
 
-        private void PushPage(Panel page)
+        private void PushPage(InteractivePanel page)
         {
             if (pageStack.Contains(page))
             {
@@ -436,45 +384,33 @@ namespace Mochi.Unity.GUI
             }
 
             page.transform.SetParent(pageLayer, false);
-            Panel previous = CurrentPage;
+            InteractivePanel previous = CurrentPage;
             pageStack.Add(page);
             page.Closed += OnPageClosed;
 
-            //同栈盖页同样先采焦点：被盖页解除遮蔽后要回到自己失去焦点前的目标
-            previous?.CaptureFocusBeforeCover();
+            previous?.CoverInternal();
             page.Show();
-
-            if (previous != null && !ReferenceEquals(previous, page))
-            {
-                //被新页盖住：收回显示与交互但保留实例渲染
-                previous.CoverInternal();
-            }
-
-            //新页的显现由自身 Show 负责，这里只重算 Modal 遮蔽
-            RefreshCoverage();
         }
 
         private void OnPageClosed(Panel page)
         {
-            int index = pageStack.IndexOf(page);
+            InteractivePanel closedPage = page as InteractivePanel;
+            int index = closedPage == null ? -1 : pageStack.IndexOf(closedPage);
             if (index < 0)
             {
                 return;
             }
 
             page.Closed -= OnPageClosed;
-            bool wasTop = ReferenceEquals(CurrentPage, page);
+            bool wasTop = ReferenceEquals(CurrentPage, closedPage);
             pageStack.RemoveAt(index);
 
-            //关掉的是显示中的栈顶：暴露出来的下层页按原状显现
-            if (wasTop)
+            //抽走栈顶后露出的下层页按原状显现；Modal 在场时页面整体保持遮蔽
+            if (wasTop && modalStack.Count == 0)
             {
-                RefreshCoverage();
-                if (modalStack.Count == 0)
-                {
-                    CurrentPage?.UncoverInternal();
-                }
+                CurrentPage?.UncoverInternal();
             }
+
             if (pageStack.Count == 0)
             {
                 StackEmptied?.Invoke();
@@ -501,12 +437,9 @@ namespace Mochi.Unity.GUI
                 pending.TrySetResult(ModalResult<object>.Cancelled());
             }
 
-            int index = modalStack.IndexOf(closedModal);
-            modalStack.RemoveAt(index);
+            modalStack.Remove(closedModal);
 
-            //先按剩余栈重算遮蔽：Page 层与下层 Modal 的锁随栈顶变化即时更新
-            RefreshCoverage();
-
+            //按剩余栈恢复：Modal 仍在场时只有新栈顶解除遮蔽，栈空时回到栈顶页
             if (modalStack.Count == 0)
             {
                 CurrentPage?.UncoverInternal();
@@ -527,7 +460,7 @@ namespace Mochi.Unity.GUI
 
         private bool PopTopPage()
         {
-            Panel page = CurrentPage;
+            InteractivePanel page = CurrentPage;
             if (page == null)
             {
                 return false;
@@ -537,61 +470,39 @@ namespace Mochi.Unity.GUI
             return true;
         }
 
-        //遮蔽规则：Modal 在场时 Page 层与下层 Modal 去激活（保持渲染但不可交互、不接收射线），仅栈顶 Modal 可交互
-        private void RefreshCoverage()
+        //遮蔽规则：Modal 在场时页面与下层 Modal 收回交互（保持渲染），仅栈顶 Modal 可交互
+        private void CoverLayersBelowTopModal()
         {
-            bool modalPresent = modalStack.Count > 0;
-
-            if (pageLayerCanvasGroup != null)
+            foreach (InteractivePanel page in pageStack)
             {
-                pageLayerCanvasGroup.interactable = !modalPresent;
-                pageLayerCanvasGroup.blocksRaycasts = !modalPresent;
-            }
-
-            if (!modalPresent)
-            {
-                return;
-            }
-
-            foreach (Panel page in pageStack)
-            {
-                DeactivatePanel(page);
+                page?.CoverInternal();
             }
 
             for (int index = 0; index < modalStack.Count - 1; index++)
             {
-                DeactivatePanel(modalStack[index]);
+                modalStack[index].CoverInternal();
             }
         }
 
-        private static void DeactivatePanel(Panel panel)
+        //取消动作挂在常驻的项目输入资产上：服务销毁时必须退订，否则已销毁的实例还会收到取消
+        private void OnDestroy()
         {
-            panel?.CoverInternal();
+            UnbindCancelInput();
         }
 
-        //遮蔽会收回焦点：先让即将被遮的面板记下自己停滞的焦点，再做任何可能转移焦点的动作
-        private void CaptureCoveredFocus()
+        private static string RequireAddress(string address)
         {
-            foreach (Panel page in pageStack)
+            if (string.IsNullOrEmpty(address))
             {
-                page?.CaptureFocusBeforeCover();
+                throw new ArgumentException("Panel address is required.", nameof(address));
             }
 
-            for (int index = 0; index < modalStack.Count; index++)
-            {
-                modalStack[index]?.CaptureFocusBeforeCover();
-            }
-        }
-
-        private static CanvasGroup ResolveLayerCanvasGroup(RectTransform layer)
-        {
-            CanvasGroup group = layer.GetComponent<CanvasGroup>();
-            return group != null ? group : layer.gameObject.AddComponent<CanvasGroup>();
+            return address;
         }
 
         private void RequireLayers()
         {
-            if (modalLayer == null)
+            if (pageLayer == null || modalLayer == null)
             {
                 throw new InvalidOperationException("BindLayers must be called before using the panel stacks.");
             }

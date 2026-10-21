@@ -106,6 +106,104 @@ namespace Mochi.Unity.GUI.Tests
             });
         }
 
+        [UnityTest]
+        // 架构：数据交付时机 GUI 服务能以基础 Panel 泛型版为类型参数创建带数据面板，数据经应用通道交付。
+        public IEnumerator CreatePanelAsync_TypedPanel_AppliesDataThroughDataInterface()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                UIRoot root = CreateRoot();
+                GUIService service = new GUIService(root, new FactoryLoader(CreatePrefab<TestDataPanel>()));
+                TestData data = new TestData(42);
+
+                TestDataPanel panel = await service.CreatePanelAsync<TestDataPanel, TestData>(data, "panel", "typed-page");
+
+                Assert.That(panel.GetType(), Is.EqualTo(typeof(TestDataPanel)));
+                Assert.That(panel.Current, Is.SameAs(data));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+                Assert.That(service.GetPanel("typed-page"), Is.SameAs(panel));
+                service.Dispose();
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 GUI 服务能以可交互面板泛型版为类型参数创建带数据面板，数据经应用通道交付。
+        public IEnumerator CreatePanelAsync_TypedInteractivePanel_AppliesDataThroughDataInterface()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                UIRoot root = CreateRoot();
+                GUIService service = new GUIService(root, new FactoryLoader(CreatePrefab<TestDataInteractivePanel>()));
+                TestData data = new TestData(7);
+
+                TestDataInteractivePanel panel =
+                    await service.CreatePanelAsync<TestDataInteractivePanel, TestData>(data, "panel", "typed-interactive-page");
+
+                Assert.That(panel.GetType(), Is.EqualTo(typeof(TestDataInteractivePanel)));
+                Assert.That(panel.Current, Is.SameAs(data));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+                Assert.That(service.GetPanel("typed-interactive-page"), Is.SameAs(panel));
+                service.Dispose();
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 面板打开后再次应用数据只替换数据，不重入 Open/Close 生命周期。
+        public IEnumerator ApplyData_AfterOpen_ReplacesDataWithoutLifecycleReentry()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                UIRoot root = CreateRoot();
+                GUIService service = new GUIService(root, new FactoryLoader(CreatePrefab<TestDataPanel>()));
+                TestData initial = new TestData(1);
+                TestData replacement = new TestData(2);
+
+                TestDataPanel panel =
+                    await service.CreatePanelAsync<TestDataPanel, TestData>(initial, "panel", "reapply-page");
+                Assert.That(panel.Current, Is.SameAs(initial));
+                Assert.That(panel.ApplyCount, Is.EqualTo(1));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+
+                panel.ApplyData(replacement);
+
+                Assert.That(panel.Current, Is.SameAs(replacement));
+                Assert.That(panel.ApplyCount, Is.EqualTo(2));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+                Assert.That(panel.CloseCount, Is.EqualTo(0));
+                Assert.That(panel.IsOpen, Is.True);
+                service.Dispose();
+            });
+        }
+
+        [UnityTest]
+        // 架构：数据交付时机 可交互面板打开后再次应用数据只替换数据，不重入 Open/Close 生命周期。
+        public IEnumerator ApplyData_AfterOpen_OnInteractivePanel_ReplacesDataWithoutLifecycleReentry()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                UIRoot root = CreateRoot();
+                GUIService service = new GUIService(root, new FactoryLoader(CreatePrefab<TestDataInteractivePanel>()));
+                TestData initial = new TestData(3);
+                TestData replacement = new TestData(4);
+
+                TestDataInteractivePanel panel =
+                    await service.CreatePanelAsync<TestDataInteractivePanel, TestData>(
+                        initial, "panel", "reapply-interactive-page");
+                Assert.That(panel.Current, Is.SameAs(initial));
+                Assert.That(panel.ApplyCount, Is.EqualTo(1));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+
+                panel.ApplyData(replacement);
+
+                Assert.That(panel.Current, Is.SameAs(replacement));
+                Assert.That(panel.ApplyCount, Is.EqualTo(2));
+                Assert.That(panel.OpenCount, Is.EqualTo(1));
+                Assert.That(panel.CloseCount, Is.EqualTo(0));
+                Assert.That(panel.IsOpen, Is.True);
+                service.Dispose();
+            });
+        }
+
         [Test]
         public void UIRoot_ResolvesAllFiveLayers()
         {
@@ -167,6 +265,64 @@ namespace Mochi.Unity.GUI.Tests
 
         private sealed class OtherPanel : Panel
         {
+        }
+
+        private sealed class TestData
+        {
+            public TestData(int value)
+            {
+                Value = value;
+            }
+
+            public int Value { get; }
+        }
+
+        private sealed class TestDataPanel : Panel<TestData>
+        {
+            public TestData Current { get; private set; }
+            public int ApplyCount { get; private set; }
+            public int OpenCount { get; private set; }
+            public int CloseCount { get; private set; }
+
+            protected override void OnApplyData(TestData data)
+            {
+                Current = data;
+                ApplyCount++;
+            }
+
+            protected override void OnOpen()
+            {
+                OpenCount++;
+            }
+
+            protected override void OnClose()
+            {
+                CloseCount++;
+            }
+        }
+
+        private sealed class TestDataInteractivePanel : InteractivePanel<TestData>
+        {
+            public TestData Current { get; private set; }
+            public int ApplyCount { get; private set; }
+            public int OpenCount { get; private set; }
+            public int CloseCount { get; private set; }
+
+            protected override void OnApplyData(TestData data)
+            {
+                Current = data;
+                ApplyCount++;
+            }
+
+            protected override void OnOpen()
+            {
+                OpenCount++;
+            }
+
+            protected override void OnClose()
+            {
+                CloseCount++;
+            }
         }
     }
 }

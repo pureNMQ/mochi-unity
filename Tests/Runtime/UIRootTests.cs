@@ -56,6 +56,32 @@ namespace Mochi.Unity.GUI.Tests
             });
         }
 
+        // 验收条件 AC11：当面板位于 HUD、Transition 或 Toast 层，则其上的控件不能被鼠标、键盘或手柄交互。
+        [UnityTest]
+        public IEnumerator DisplayOnlyLayers_AreNotInteractable_AndRebuildKeepsThemSo()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                ClearLeftoverRoots();
+                UIRoot root = Track(new GameObject("UIRoot")).AddComponent<UIRoot>();
+
+                AssertLayerInteraction(root.HUD, false);
+                AssertLayerInteraction(root.Page, true);
+                AssertLayerInteraction(root.Modal, true);
+                AssertLayerInteraction(root.Transition, false);
+                AssertLayerInteraction(root.GetLayer(GUILayer.Toast), false);
+
+                //层被销毁后按需重建的层必须保持同一语义
+                Object.DestroyImmediate(root.GetLayer(GUILayer.Toast).gameObject);
+                AssertLayerInteraction(root.GetLayer(GUILayer.Toast), false);
+
+                Object.DestroyImmediate(root.Page.gameObject);
+                AssertLayerInteraction(root.Page, true);
+
+                await UniTask.Yield();
+            });
+        }
+
         // 验收条件 AC22A:当 UI 根被销毁后重建，则五层恢复且顺序不变。
         [UnityTest]
         public IEnumerator DestroyAndRebuild_RestoresFiveLayersAndOrder()
@@ -78,6 +104,14 @@ namespace Mochi.Unity.GUI.Tests
 
                 await AssertLayerRenderOrderAsync(FindFiveLayers(rebuilt));
             });
+        }
+
+        private static void AssertLayerInteraction(RectTransform layer, bool expected)
+        {
+            CanvasGroup group = layer.GetComponent<CanvasGroup>();
+            Assert.That(group, Is.Not.Null, layer.name + " 缺少 CanvasGroup");
+            Assert.That(group.interactable, Is.EqualTo(expected), layer.name + " interactable");
+            Assert.That(group.blocksRaycasts, Is.EqualTo(expected), layer.name + " blocksRaycasts");
         }
 
         //直接检查画布层级而非经层属性访问，避免属性懒重建掩盖装配缺失
