@@ -11,7 +11,7 @@ namespace Mochi.Unity.Editor
     /// </summary>
     internal static class TextMeshProDynamicFontCleaner
     {
-        private const string MenuRoot = "Tools/Mochi/TextMeshPro/";
+        private const string MenuRoot = "Mochi/TextMeshPro/";
         private const string CleanAllMenuPath = MenuRoot + "清理动态字体数据";
         private const string SaveHookMenuPath = MenuRoot + "保存时自动清理动态字体数据";
 
